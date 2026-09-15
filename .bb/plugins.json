@@ -1,0 +1,11 @@
+{
+  "$schema": "https://getbb.app/schemas/plugins.schema.json",
+  "schemaVersion": 1,
+  "name": "liongkj-bb-plugins",
+  "plugins": [
+    { "name": "account-pool-custom", "source": "./plugins/account-pool-custom" },
+    { "name": "close-terminal-button", "source": "./plugins/close-terminal-button" },
+    { "name": "thread-usage", "source": "./plugins/thread-usage" },
+    { "name": "worktree-cleanup", "source": "./plugins/worktree-cleanup" }
+  ]
+}
