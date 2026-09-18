@@ -4,8 +4,10 @@
   "name": "liongkj-bb-plugins",
   "plugins": [
     { "name": "account-pool-custom", "source": "./plugins/account-pool-custom" },
+    { "name": "auto-settle", "source": "./plugins/auto-settle" },
     { "name": "close-terminal-button", "source": "./plugins/close-terminal-button" },
     { "name": "thread-usage", "source": "./plugins/thread-usage" },
+    { "name": "thread-handoffs", "source": "./plugins/thread-handoffs" },
     { "name": "worktree-cleanup", "source": "./plugins/worktree-cleanup" }
   ]
 }

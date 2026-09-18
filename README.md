@@ -5,6 +5,7 @@ Personal BB plugins maintained in one repository.
 ## Included plugins
 
 - Account Pooler Custom — per-account quota switch thresholds for Claude and Codex.
+- Auto Settle — settle a thread when its pull request is merged, with or without the BB Sidebar plugin.
 - Close Terminal Button — inspect and close terminal sessions from a thread header.
 - Thread Usage — show thread token, cache, and context metrics.
 - Worktree Cleanup — audit and clean worktrees with human-gated recovery.
@@ -30,6 +31,6 @@ bb plugin install git:https://github.com/liongkj/bb-plugins.git@main \
   --subdirectory plugins/account-pool-custom --yes
 ```
 
-The `.bb/plugins.json` file indexes all four plugins for BB marketplace and
+The `.bb/plugins.json` file indexes every plugin for BB marketplace and
 collection installs. The previous standalone repositories remain available as
 historical sources; new changes should land here.
