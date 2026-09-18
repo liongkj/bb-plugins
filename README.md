@@ -8,6 +8,7 @@ Personal BB plugins maintained in one repository.
 - Auto Settle — settle a thread when its pull request is merged, with or without the BB Sidebar plugin.
 - Close Terminal Button — inspect and close terminal sessions from a thread header.
 - Thread Usage — show thread token, cache, and context metrics.
+- Thread Handoffs — show which threads were handed off to which, with sidebar badges and grouped chains.
 - Worktree Cleanup — audit and clean worktrees with human-gated recovery.
 
 ## Development
