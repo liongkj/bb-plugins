@@ -397,7 +397,7 @@
   " дн": " d",
   " ч": " h",
   " мин": " min",
-  "Вход в": "Sign in to",
+  "Вход в": "Sign in to ",
   " с": " from",
   "Хаб": "Hub",
   "обновляю…": "refreshing…",
@@ -412,5 +412,6 @@
   "Добавить": "Add",
   "аккаунта": "account",
   "аккаунт": "account",
-  "добавлен в пул": "added to the pool"
+  "добавлен в пул": "added to the pool",
+  "идут через этот прокси": "use this proxy"
 }
