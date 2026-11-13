@@ -418,5 +418,6 @@
   "Неделя: оставить": "Weekly: preserve",
   "Резерв: за": "Reserve:",
   "Нет разрешённых интервалов": "No allowed intervals",
-  "Наследуются общие значения": "Shared values inherited"
+  "Наследуются общие значения": "Shared values inherited",
+  "Адрес и пароль сохраняются на сервере. Модельные запросы, квоты и обновление входа идут через этот прокси.": "The address and password are stored on the server. Model requests, quota checks, and sign-in refresh use this proxy."
 }
