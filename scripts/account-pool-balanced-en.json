@@ -413,5 +413,10 @@
   "аккаунта": "account",
   "аккаунт": "account",
   "добавлен в пул": "added to the pool",
-  "идут через этот прокси": "use this proxy"
+  "идут через этот прокси": "use this proxy",
+  "5 ч: оставить": "5h: preserve",
+  "Неделя: оставить": "Weekly: preserve",
+  "Резерв: за": "Reserve:",
+  "Нет разрешённых интервалов": "No allowed intervals",
+  "Наследуются общие значения": "Shared values inherited"
 }
