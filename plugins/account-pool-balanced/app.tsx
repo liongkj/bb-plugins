@@ -298,7 +298,7 @@ function savedResetDeadline(timestamp: number | null): string {
     hour: "2-digit", minute: "2-digit", second: "2-digit",
     hourCycle: "h23", timeZone: POOL_TIME_ZONE,
   }).format(timestamp);
-  return `${timestamp <= Date.now() ? "истёк" : "действует до"} ${date} МСК`;
+  return `${timestamp <= Date.now() ? "expired" : "valid until"} ${date} МСК`;
 }
 
 function resetLimitLabel(limit: string): string {
@@ -1554,12 +1554,12 @@ function AccountPoolSettings() {
       </section>
       <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-subtle-foreground/75">
         {[
-          { dot: "bg-success", label: "берёт трафик" },
-          { dot: "bg-warning", label: "близко к лимиту или потолку" },
-          { dot: "bg-destructive", label: "заблокирован до сброса" },
+          { dot: "bg-success", label: "receiving traffic" },
+          { dot: "bg-warning", label: "near provider limit or cap" },
+          { dot: "bg-destructive", label: "blocked until reset" },
           {
             dot: "bg-muted-foreground",
-            label: "в запасе, выключен или без данных",
+            label: "on standby, disabled, or no data",
           },
         ].map((entry) => (
           <span key={entry.label} className="inline-flex items-center gap-1.5">
@@ -1621,7 +1621,7 @@ function AccountPoolSettings() {
           <SettingsSection
             key={provider.id}
             title={provider.title}
-            description={provider.id === "agy" && nativeAccounts?.managed !== false ? "Официальный клиент. Вход Google хранится на машинах исполнителей; одна подписка объединяет их общий лимит." : `${provider.description} В работе: ${providerAccounts.reduce((n,a)=>n+a.inFlight,0)}; в очереди: ${providerAccounts.reduce((n,a)=>n+a.queuedRequests,0)}. Предел на аккаунт: ${config?.maxConcurrentRequestsPerAccount ?? 2}.`}
+            description={provider.id === "agy" && nativeAccounts?.managed !== false ? "Official client. Google sign-in remains on executor machines; a shared subscription aggregates their quota." : `${provider.description} В работе: ${providerAccounts.reduce((n,a)=>n+a.inFlight,0)}; в очереди: ${providerAccounts.reduce((n,a)=>n+a.queuedRequests,0)}. Предел на аккаунт: ${config?.maxConcurrentRequestsPerAccount ?? 2}.`}
             action={
               <div className="flex flex-wrap items-center gap-2">
                 <Switch
@@ -1643,7 +1643,7 @@ function AccountPoolSettings() {
                       ? [...(config?.vpnOnlyProviders ?? []).filter(value => value !== provider.id), provider.id as "codex" | "claude" | "cursor" | "devin" | "neuraldeep" | "agy"]
                       : (config?.vpnOnlyProviders ?? []).filter(value => value !== provider.id) })} />Только VPN
                 </label>}
-                {provider.id === "agy" && nativeAccounts?.managed !== false ? <SettingsBadge>{nativeAccounts === null ? nativeError ? "Данные недоступны" : "Проверка исполнителей…" : "Официальный клиент"}</SettingsBadge> : <AddAccountMenu
+                {provider.id === "agy" && nativeAccounts?.managed !== false ? <SettingsBadge>{nativeAccounts === null ? nativeError ? "Data unavailable" : "Checking executors…" : "Official client"}</SettingsBadge> : <AddAccountMenu
                   provider={provider.id}
                   onChoose={(choice) => void chooseAdd(provider.id, choice)}
                 />}
@@ -1655,10 +1655,10 @@ function AccountPoolSettings() {
               <div key={account.accountId} className="space-y-2 border-b border-border py-3 last:border-b-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <button type="button" className="text-sm font-medium text-foreground hover:underline" onClick={() => setNativeSettings(account.accountId)}>Google · {account.label ?? "Antigravity"}</button>
-                  <SettingsBadge>{!nativeAccounts.managed ? "Управляемый режим выключен" : account.uncertain > 0 ? "Требуется проверка остановки" : account.executors.some(executor => executor.enabled) ? "Настроен" : "Исполнители выключены"}</SettingsBadge>
+                  <SettingsBadge>{!nativeAccounts.managed ? "Managed mode disabled" : account.uncertain > 0 ? "Stop verification required" : account.executors.some(executor => executor.enabled) ? "Configured" : "Executors disabled"}</SettingsBadge>
                 </div>
                 <p className="break-all text-xs text-muted-foreground">Подписка: {account.accountId}</p>
-                <ul className="space-y-1 text-xs text-muted-foreground">{account.executors.map(executor => <li key={executor.id} className="flex flex-wrap items-center gap-2 break-words"><span>{executor.id} · {executor.enabled ? "включён" : "выключен"} · автопилот {executor.autopilotAllowed ? "разрешён" : "выключен"}</span>{executor.preferred ? <SettingsBadge>Выбран для новых сессий</SettingsBadge> : executor.enabled && nativeAccounts.selectionRevision ? <Button size="sm" disabled={pending !== null} aria-label={`Выбрать ${executor.id}`} onClick={() => void run('native-prefer',async()=>{await rpc.call('native.prefer',{executorId:executor.id,expectedRevision:nativeAccounts.selectionRevision!});await refreshNative();})}>Использовать</Button> : null}</li>)}</ul>
+                <ul className="space-y-1 text-xs text-muted-foreground">{account.executors.map(executor => <li key={executor.id} className="flex flex-wrap items-center gap-2 break-words"><span>{executor.id} · {executor.enabled ? "enabled" : "disabled"} · автопилот {executor.autopilotAllowed ? "разрешён" : "disabled"}</span>{executor.preferred ? <SettingsBadge>Выбран для новых сессий</SettingsBadge> : executor.enabled && nativeAccounts.selectionRevision ? <Button size="sm" disabled={pending !== null} aria-label={`Выбрать ${executor.id}`} onClick={() => void run('native-prefer',async()=>{await rpc.call('native.prefer',{executorId:executor.id,expectedRevision:nativeAccounts.selectionRevision!});await refreshNative();})}>Использовать</Button> : null}</li>)}</ul>
                 <p className="text-xs text-muted-foreground">В работе: {account.active}; в очереди: {account.queued}; остановка не подтверждена: {account.uncertain}.</p>
                 <p className="text-xs text-muted-foreground">Лимит здесь не измеряется. Состояние входа проверяет официальный клиент на машине исполнителя.</p>
               </div>
@@ -1714,14 +1714,14 @@ function AccountPoolSettings() {
         </div>
         <div className="divide-y divide-border border-t border-border">
           <ConfigFieldRow
-            label="Балансировка"
-            description="Новые разговоры уходят на аккаунт с наибольшим остатком недельной квоты до сброса. Выключено — идём по приоритету."
+            label="Load balancing"
+            description="New conversations use the account with the largest remaining weekly quota. When disabled, accounts are selected by priority."
             error={null}
           >
             <Switch
               checked={config?.routingStrategy === "balanced"}
               disabled={config === null || pending !== null}
-              aria-label="Балансировка"
+              aria-label="Load balancing"
               onCheckedChange={(enabled) =>
                 void saveRouting({
                   routingStrategy: enabled ? "balanced" : "sequential",
@@ -1780,9 +1780,9 @@ function AccountPoolSettings() {
                               </td>
                               <td className="py-1 pr-3 whitespace-nowrap">
                                 {opens === null
-                                  ? "сброс неизвестен"
+                                  ? "reset unknown"
                                   : opens <= Date.now()
-                                    ? "уже открыто"
+                                    ? "already open"
                                     : moment(opens)}
                               </td>
                               <td className="py-1 pr-3 whitespace-nowrap">
@@ -1802,8 +1802,8 @@ function AccountPoolSettings() {
             )}
           </div>
           <ConfigFieldRow
-            label="Часы расхода резерва"
-            description="Рабочие часы до недельного сброса, когда резервные аккаунты подключаются к основным."
+            label="Reserve drain hours"
+            description="Working hours before the weekly reset when reserve accounts join primary accounts."
             error={null}
           >
             <Input
@@ -1811,7 +1811,7 @@ function AccountPoolSettings() {
               min="1"
               max="168"
               step="1"
-              aria-label="Часы расхода резерва"
+              aria-label="Reserve drain hours"
               disabled={config === null || pending !== null}
               value={drainDraft}
               onChange={(event) => {
@@ -1825,12 +1825,12 @@ function AccountPoolSettings() {
             />
           </ConfigFieldRow>
           <ConfigFieldRow
-            label="Выходные"
-            description="Дни, которые пул считает нерабочими: их часы не двигают аккаунт к сбросу, поэтому на выходных потолки остаются низкими."
+            label="Non-working days"
+            description="Days the pool treats as non-working: these hours do not advance an account toward reset, keeping weekend caps low."
             error={routingError}
           >
             <div>
-              <div className="flex flex-wrap gap-1" aria-label="Выходные">
+              <div className="flex flex-wrap gap-1" aria-label="Non-working days">
                 {WEEKDAY_LABELS.map((title, day) => {
                   const off = (config?.restDays ?? []).includes(day);
                   return (
@@ -1876,12 +1876,12 @@ function AccountPoolSettings() {
         <CollapsibleContent>
           <div className="divide-y divide-border border-t border-border">
             <ConfigFieldRow
-              label="Базовый URL upstream Anthropic"
-              description="QA-переопределение для трафика Anthropic."
+              label="Anthropic upstream base URL"
+              description="QA override for Anthropic traffic."
               error={configErrors.anthropicUpstreamBaseUrl}
             >
               <Input
-                aria-label="Базовый URL upstream Anthropic"
+                aria-label="Anthropic upstream base URL"
                 aria-invalid={
                   configErrors.anthropicUpstreamBaseUrl === null
                     ? undefined
@@ -1902,12 +1902,12 @@ function AccountPoolSettings() {
               />
             </ConfigFieldRow>
             <ConfigFieldRow
-              label="Базовый URL upstream Codex"
-              description="QA-переопределение для трафика ChatGPT Codex."
+              label="Codex upstream base URL"
+              description="QA override for ChatGPT Codex traffic."
               error={configErrors.codexUpstreamBaseUrl}
             >
               <Input
-                aria-label="Базовый URL upstream Codex"
+                aria-label="Codex upstream base URL"
                 aria-invalid={
                   configErrors.codexUpstreamBaseUrl === null ? undefined : true
                 }
@@ -1922,18 +1922,18 @@ function AccountPoolSettings() {
                 }}
               />
             </ConfigFieldRow>
-            <ConfigFieldRow label="Одновременных запросов на аккаунт"
-              description="Общий предел для всех машин и клиентов. Остальные запросы ждут в очереди; паузы провайдера обязательны."
+            <ConfigFieldRow label="Concurrent requests per account"
+              description="Shared limit across machines and clients. Additional requests queue; provider cooldowns are enforced."
               error={configErrors.maxConcurrentRequestsPerAccount}>
-              <Input type="number" min="1" max="32" step="1" aria-label="Одновременных запросов на аккаунт"
+              <Input type="number" min="1" max="32" step="1" aria-label="Concurrent requests per account"
                 disabled={config === null || pending !== null} value={drafts.maxConcurrentRequestsPerAccount}
                 onChange={event => updateConfigDraft("maxConcurrentRequestsPerAccount",event.target.value)}
                 onBlur={() => void saveConfigField("maxConcurrentRequestsPerAccount")}
                 onKeyDown={event => {if(event.key === "Enter") event.currentTarget.blur();}} />
             </ConfigFieldRow>
             <ConfigFieldRow
-              label="Порог переключения по квоте"
-              description="Не выбирать аккаунт при этой доле израсходованной квоты."
+              label="Quota switching threshold"
+              description="Do not select an account at this fraction of consumed quota."
               error={configErrors.switchThreshold}
             >
               <Input
@@ -1941,7 +1941,7 @@ function AccountPoolSettings() {
                 min="0.01"
                 max="1"
                 step="0.01"
-                aria-label="Порог переключения по квоте"
+                aria-label="Quota switching threshold"
                 aria-invalid={
                   configErrors.switchThreshold === null ? undefined : true
                 }
@@ -2037,7 +2037,7 @@ function AccountPoolSettings() {
         ) : null}
         {dialog?.kind === "priority" && selectedAccount !== null ? (
           <DialogFrame
-            title="Приоритет"
+            title="Priority"
             footer={
               <>
                 <span className="flex-1" />
@@ -2078,7 +2078,7 @@ function AccountPoolSettings() {
         ) : null}
         {dialog?.kind === "role" && selectedAccount !== null ? (
           <DialogFrame
-            title="Роль"
+            title="Role"
             footer={
               <>
                 <span className="flex-1" />
@@ -2116,7 +2116,7 @@ function AccountPoolSettings() {
                   aria-pressed={roleDraft === role}
                   onClick={() => setRoleDraft(role)}
                 >
-                  {role === "primary" ? "Основной" : "Резерв"}
+                  {role === "primary" ? "Primary" : "Reserve"}
                 </Button>
               ))}
             </div>
@@ -2124,7 +2124,7 @@ function AccountPoolSettings() {
         ) : null}
         {dialog?.kind === "cap" && selectedAccount !== null ? (
           <DialogFrame
-            title="Недельный потолок"
+            title="Weekly cap"
             footer={
               <>
                 <Button
@@ -2187,7 +2187,7 @@ function AccountPoolSettings() {
                 min="0"
                 max="1"
                 step="0.01"
-                aria-label="Потолок в начале недели"
+                aria-label="Start-of-week cap"
                 value={capDraft.early}
                 onChange={(event) =>
                   setCapDraft((current) => ({
@@ -2201,7 +2201,7 @@ function AccountPoolSettings() {
                 min="0"
                 max="1"
                 step="0.01"
-                aria-label="Потолок к сбросу"
+                aria-label="Cap at reset"
                 value={capDraft.late}
                 onChange={(event) =>
                   setCapDraft((current) => ({
@@ -2215,7 +2215,7 @@ function AccountPoolSettings() {
         ) : null}
         {dialog?.kind === "api-key" ? (
           <DialogFrame
-            title={dialog.provider === "claude" ? "Добавить API-ключ Anthropic" : `Добавить ${dialog.provider === "devin" ? "PAT" : "API key"} ${PROVIDERS.find((entry) => entry.id === dialog.provider)?.title ?? dialog.provider}`}
+            title={dialog.provider === "claude" ? "Add Anthropic API key" : `Добавить ${dialog.provider === "devin" ? "PAT" : "API key"} ${PROVIDERS.find((entry) => entry.id === dialog.provider)?.title ?? dialog.provider}`}
             footer={
               <>
                 <span className="flex-1" />
@@ -2288,7 +2288,7 @@ function AccountPoolSettings() {
             </p>
           </DialogFrame>
         ) : null}
-        {dialog?.kind==='agy-login'?<DialogFrame title="Вход в Antigravity" footer={loginDone?<Button onClick={closeDialog}>Готово</Button>:<Button disabled={!agyStep||!pastedCode.trim()||pending!==null} onClick={()=>void run('agy-complete',async()=>{
+        {dialog?.kind==='agy-login'?<DialogFrame title="Antigravity sign-in" footer={loginDone?<Button onClick={closeDialog}>Готово</Button>:<Button disabled={!agyStep||!pastedCode.trim()||pending!==null} onClick={()=>void run('agy-complete',async()=>{
           if(!agyStep)return;
           const added=await rpc.call('agyLogin.complete',{sessionId:agyStep.sessionId,pasted:pastedCode});
           setPastedCode('');setAgyStep(null);setLoginDone(added.label);
@@ -2297,7 +2297,7 @@ function AccountPoolSettings() {
             <p>Авторизуйте личную подписку Antigravity в Google. Вход сохранится на сервере пула.</p>
             <p>После подтверждения Google покажет код авторизации. Скопируйте код в это поле и нажмите «Завершить». Адрес из строки браузера копировать не нужно.</p>
             <Button variant="outline" disabled={!agyStep||pending!==null} onClick={()=>agyStep&&run("agy-browser",async()=>{await rpc.call("agyLogin.openBrowser",{sessionId:agyStep.sessionId});})}>Открыть Google в Helium</Button>
-            <Input aria-label="Код авторизации Google" value={pastedCode} autoComplete="off" spellCheck={false} type="password" onChange={e=>setPastedCode(e.target.value)}/>
+            <Input aria-label="Google authorization code" value={pastedCode} autoComplete="off" spellCheck={false} type="password" onChange={e=>setPastedCode(e.target.value)}/>
             <p>Вход действует 10 минут. Нужна уже активированная личная подписка Antigravity; корпоративный вход не поддерживается.</p>
           </>}
           {error?<p role="alert">{error}</p>:null}
@@ -2306,7 +2306,7 @@ function AccountPoolSettings() {
           <LoginDialog
             provider="claude"
             grokStep={null}
-            reauthorizing={reauthorizeAccountId === null ? null : status?.accounts.find(account => account.id === reauthorizeAccountId)?.email ?? "этого аккаунта"}
+            reauthorizing={reauthorizeAccountId === null ? null : status?.accounts.find(account => account.id === reauthorizeAccountId)?.email ?? "this account"}
             loginStep={loginStep}
             codexStep={null}
             loginDone={loginDone}
@@ -2389,7 +2389,7 @@ function capSummary(account: AccountSummary): string | null {
   const curve =
     account.cap ?? (account.role === "reserve" ? DEFAULT_RESERVE_CAP : null);
   if (curve === null) return null;
-  if (account.drainOnce) return "Временно снят — до исчерпания";
+  if (account.drainOnce) return "Temporarily uncapped until exhaustion";
   return `${percent(curve.early)} → ${percent(curve.late)}${
     account.capLimit === null ? "" : ` · сейчас ${percent(account.capLimit)}`
   }`;
@@ -2478,7 +2478,7 @@ function AccountDialog({
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="outline" aria-label="Другие действия аккаунта">
+              <Button size="sm" variant="outline" aria-label="Other account actions">
                 Ещё <Icon name="MoreHorizontal" className="size-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -2505,10 +2505,10 @@ function AccountDialog({
         <div className="pool-browser-actions">
           <Button size="sm" variant="outline" disabled={pending} onClick={() => openBrowser()}>
             <Icon name="ExternalLink" className="size-4" />
-            {browserPending && !showBrowserUrl ? "Открываю…" : "Открыть в браузере"}
+            {browserPending && !showBrowserUrl ? "Opening…" : "Open in browser"}
           </Button>
           <button type="button" className="pool-settings-link" aria-expanded={showBrowserUrl} aria-controls="pool-browser-link" onClick={() => setShowBrowserUrl(value => !value)} disabled={browserPending}>
-            {showBrowserUrl ? "Скрыть ссылку" : "Открыть другую ссылку"}
+            {showBrowserUrl ? "Hide URL" : "Open another URL"}
           </button>
         </div>
         <p className="pool-settings-help">Отдельный профиль · на машине Pooler</p>
@@ -2518,7 +2518,7 @@ function AccountDialog({
             <Input id="pool-browser-url" className="pool-settings-control" type="url" autoComplete="off" placeholder="https://…" value={browserUrl} onChange={event => setBrowserUrl(event.target.value)} disabled={browserPending} />
           </label>
           <Button size="sm" variant="outline" disabled={pending || !browserUrl.trim()} onClick={() => openBrowser(browserUrl)}>
-            {browserPending ? "Открываю…" : "Открыть ссылку"}
+            {browserPending ? "Opening…" : "Open URL"}
           </Button>
         </div>}
         {browserNotice === null ? null : <p role="status" className="pool-settings-help">{browserNotice}</p>}
@@ -2531,7 +2531,7 @@ function AccountDialog({
           {statusPresentation(account, threshold).label}
         </SettingsBadge>
         <SettingsBadge>
-          {account.role === "reserve" ? "Резерв" : "Основной"}
+          {account.role === "reserve" ? "Reserve" : "Primary"}
         </SettingsBadge>
         <Button size="sm" variant="ghost" className="pool-settings-link" disabled={pending || projectsUnsaved || quotaUnsaved || emailUnsaved} onClick={() => act("role")}>
           Изменить роль
@@ -2546,7 +2546,7 @@ function AccountDialog({
               const allowed = event.target.checked;
               setAutopilotPending(true); setAutopilotError(null);
               try { await saveAutopilot(allowed, account.autopilotAllowed); }
-              catch { setAutopilotError("Не удалось сохранить разрешение. Обновите данные и повторите."); }
+              catch { setAutopilotError("Failed to save permission. Refresh and retry."); }
               finally { setAutopilotPending(false); }
             }} />
           Разрешить автопилоту
@@ -2612,7 +2612,7 @@ function AccountDialog({
               threshold={limits.fiveHour}
             />
             <QuotaDetail
-              label="7 дней"
+              label="7 days"
               quota={shared(
                 account.sevenDayUtilization,
                 account.sevenDayResetAt,
@@ -2649,10 +2649,10 @@ function AccountDialog({
                 <div className="text-muted-foreground">Сроки действия не удалось получить.</div>
               ) : account.resetCredits.credits.map((credit, index) => (
                 <div key={index} className="text-muted-foreground">
-                  <div>{credit.title ?? "Полный сброс"}{credit.remaining === undefined ? "" : ` · сбросов: ${credit.remaining}`}</div>
+                  <div>{credit.title ?? "Full reset"}{credit.remaining === undefined ? "" : ` · сбросов: ${credit.remaining}`}</div>
                   <div>{savedResetDeadline(credit.expiresAt)}</div>
                   {credit.limitTypes?.length ? <div>Обновляет: {credit.limitTypes.map(resetLimitLabel).join(", ")}</div> : null}
-                  {credit.usableNow === false ? <div>{credit.requiresLimit ? "Можно использовать при достижении лимита" : "Сейчас нельзя применить"}</div> : null}
+                  {credit.usableNow === false ? <div>{credit.requiresLimit ? "Available when the limit is reached" : "Cannot apply now"}</div> : null}
                 </div>
               ))}
             </>
@@ -2679,13 +2679,13 @@ function AccountDialog({
         <dt className="text-muted-foreground">Использован</dt>
         <dd>
           {account.lastUsedAt === null
-            ? "Никогда"
+            ? "Never"
             : `${relative(account.lastUsedAt)}${account.lastUsedHostName === null ? "" : ` · ${account.lastUsedHostName}`}`}
         </dd>
         <dt className="text-muted-foreground">Квоты обновлены</dt>
         <dd>
           {account.observedAt === null
-            ? "Никогда"
+            ? "Never"
             : relative(account.observedAt)}
         </dd>
         {providerId === null || providerId === undefined ? null : (
@@ -2746,7 +2746,7 @@ function LoginDialog({
   const deviceStep = provider === "grok" ? grokStep : codexStep;
   return (
     <DialogFrame
-      title={reauthorizing === null ? `Вход в ${name}` : "Повторная авторизация Claude"}
+      title={reauthorizing === null ? `Вход в ${name}` : "Reauthorize Claude"}
       className="sm:max-w-xl"
       footer={
         loginDone !== null ? (
@@ -2773,9 +2773,9 @@ function LoginDialog({
       <StepIndicator step={loginDone === null ? 2 : 3} />
       {loginDone !== null ? (
         <div>
-          <h3 className="text-base font-semibold">{reauthorizing === null ? "Подключён" : "Авторизация обновлена:"} {loginDone}</h3>
+          <h3 className="text-base font-semibold">{reauthorizing === null ? "Connected" : "Authentication updated:"} {loginDone}</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            {reauthorizing === null ? `Аккаунт добавлен в пул ${name}. Квоты обновляются в фоне.` : "Настройки сохранены. Выключенный аккаунт остаётся выключенным; роль и проекты не меняются."}
+            {reauthorizing === null ? `Аккаунт добавлен в пул ${name}. Квоты обновляются в фоне.` : "Settings saved. Disabled accounts remain disabled; role and projects are unchanged."}
           </p>
         </div>
       ) : url === undefined ? (
@@ -2797,10 +2797,10 @@ function LoginDialog({
           </div>}
           <p className="text-sm text-muted-foreground">
             {provider === "claude"
-              ? "Войдите на claude.ai и вставьте код с последней страницы."
+              ? "Sign in at claude.ai and paste the code from the last page."
               : provider === "grok"
-                ? "Откройте страницу проверки, войдите в xAI и введите этот код."
-                : "Откройте страницу проверки, войдите в ChatGPT и введите этот код."}
+                ? "Open the verification page, sign in to xAI, and enter this code."
+                : "Open the verification page, sign in to ChatGPT, and enter this code."}
           </p>
           {reauthorizing === null ? null : <p className="text-sm text-muted-foreground">Войдите именно в {reauthorizing}. Вход в другой аккаунт не заменит эту подписку.</p>}
           {deviceStep === null ? null : (
@@ -2814,8 +2814,8 @@ function LoginDialog({
           </div>}
           {provider === "claude" ? (
             <Input
-              aria-label="Код авторизации Claude"
-              placeholder="Вставьте code#state сюда"
+              aria-label="Claude authorization code"
+              placeholder="Paste code#state here"
               value={pastedCode}
               onChange={(event) => setPastedCode(event.target.value)}
             />
@@ -2856,24 +2856,24 @@ export function ThreadAccountIndicator({ threadId, isCompactViewport }: { thread
   }, [rpc, threadId]);
   if (status?.state === "unsupported") return null;
   const account = status?.account;
-  const availability = account === null || account === undefined ? "" : !account.enabled ? "выключен" : account.eligible ? "доступен" : "сейчас недоступен";
-  const label = error ? "Пул: ошибка проверки" : status === null ? "Пул: проверка…" : status.state === "bypassed" ? "Вне пула" : status.state === "unobserved" ? "Пул: ещё нет данных" : `${(account ? accountFullName(account) : "Удалённый аккаунт")} · ${availability}`;
+  const availability = account === null || account === undefined ? "" : !account.enabled ? "disabled" : account.eligible ? "available" : "currently unavailable";
+  const label = error ? "Pool: status check failed" : status === null ? "Pool: checking…" : status.state === "bypassed" ? "Outside pool" : status.state === "unobserved" ? "Pool: no data yet" : `${(account ? accountFullName(account) : "Removed account")} · ${availability}`;
   const details = status?.state === "observed"
     ? `Последний подтверждённый запрос: ${label}. ${status.lastUsedAt === null ? "" : new Date(status.lastUsedAt).toLocaleString("ru-RU")}. Следующий запрос может выбрать другой аккаунт. Активных запросов аккаунта: ${account?.inFlight ?? 0}.`
-    : "Аккаунт выбирается при запросе. Здесь отображаются только подтверждённые данные пула.";
+    : "The account is selected per request. Only verified pool data is shown here.";
   return <>
-    <button type="button" className="max-w-64 truncate text-xs text-muted-foreground" title={details} aria-label={`Подписка треда: ${label}`} onClick={() => setOpen(true)}>{isCompactViewport ? "Пул" : label}</button>
+    <button type="button" className="max-w-64 truncate text-xs text-muted-foreground" title={details} aria-label={`Подписка треда: ${label}`} onClick={() => setOpen(true)}>{isCompactViewport ? "Pool" : label}</button>
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogFrame title="Подписка треда" footer={<Button onClick={() => setOpen(false)}>Закрыть</Button>}>
+      <DialogFrame title="Thread subscription" footer={<Button onClick={() => setOpen(false)}>Закрыть</Button>}>
         <p>{label}</p><p className="text-sm text-muted-foreground">{details}</p>
-        {account ? <p className="text-sm">{account.role === "reserve" ? "Резерв" : "Основной"} · {account.provider} · квоты обновлены {account.observedAt === null ? "никогда" : new Date(account.observedAt).toLocaleString("ru-RU")}</p> : null}
+        {account ? <p className="text-sm">{account.role === "reserve" ? "Reserve" : "Primary"} · {account.provider} · квоты обновлены {account.observedAt === null ? "never" : new Date(account.observedAt).toLocaleString("ru-RU")}</p> : null}
       </DialogFrame>
     </Dialog>
   </>;
 }
 
 export default definePluginApp((app) => {
-  app.slots.experimental_threadHeaderAction({ id: "pool-account", title: "Подписка треда", component: ThreadAccountIndicator });
+  app.slots.experimental_threadHeaderAction({ id: "pool-account", title: "Thread subscription", component: ThreadAccountIndicator });
   app.slots.settingsSection({
     id: "accounts",
     component: AccountPoolSettings,
