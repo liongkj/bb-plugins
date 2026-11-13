@@ -1,7 +1,7 @@
 {
-  "translated_occurrences": 507,
+  "translated_occurrences": 505,
   "remaining_cyrillic_lines": {
-    "account-egress-form.tsx": 1,
+    "account-egress-form.tsx": 0,
     "account-email-form.tsx": 0,
     "account-policy-form.tsx": 0,
     "account-projects-form.tsx": 0,

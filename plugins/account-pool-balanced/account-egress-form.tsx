@@ -37,7 +37,7 @@ export function ProxyControl({pending,save}:{pending:boolean;save:(url:string)=>
      <input className="pool-settings-control" style={{width:'100%'}} maxLength={4096} type="password" autoComplete="new-password" aria-label="Account proxy"
        placeholder="http://user:password@proxy.example:8080" value={url} disabled={pending} onChange={event=>setUrl(event.target.value)}/>
    </label>
-   <p className="pool-settings-help">Address and password are stored on the server. Model requests, quota checks, and sign-in refresh use in этот proxy. No direct fallback if the proxy fails. SOCKS is not supported. Applies to new conversations; existing ones retain their route.</p>
+   <p className="pool-settings-help">The address and password are stored on the server. Model requests, quota checks, and sign-in refresh use this proxy. No direct fallback if the proxy fails. SOCKS is not supported. Applies to new conversations; existing ones retain their route.</p>
    <Button size="sm" type="submit" disabled={pending||!url.trim()}>Save proxy</Button>
  </form>;
 }
