@@ -49,7 +49,7 @@ export function AccountPolicyForm({ account, threshold, drainHours, save, onUnsa
     <p className="pool-settings-help">{draft.enabled ? policySummary(draft) : 'Действуют общие правила. Личные значения сохраняются.'}</p>
     {!account.policy && <p className="pool-settings-help">Поля заполнены текущими общими значениями. При включении они сохранятся как индивидуальные.</p>}
     <fieldset disabled={!draft.enabled || pending} className="pool-settings-fields">
-      {hasFiveHour && numberField('fiveHourKeep', 'Оставлять квоту 5 часов, %', inheritedKeep)}
+      {hasFiveHour && numberField('fiveHourKeep', 'Оставлять квоту 5 hours, %', inheritedKeep)}
       {numberField('weeklyKeep', 'Оставлять недельную квоту, %', inheritedKeep)}
       {account.role === 'reserve' && numberField('reserveDrainHours', 'Подключать резерв за рабочих часов до сброса', drainHours)}
       <label className="pool-settings-toggle"><input type="checkbox" checked={draft.schedule !== null} onChange={e => change({ schedule: e.target.checked ? { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, intervals: [{ days: [1,2,3,4,5], start: '09:00', end: '18:00' }] } : null })} />Личное расписание</label>
@@ -69,17 +69,17 @@ export function AccountPolicyForm({ account, threshold, drainHours, save, onUnsa
               <input aria-label={`Начало интервала ${index + 1}`} className="pool-settings-control" type="time" value={interval.start} onChange={e => update({ start: e.target.value })} />
               <span aria-hidden="true" className="pool-settings-time-separator">—</span>
               <input aria-label={`Конец интервала ${index + 1}`} className="pool-settings-control" type="time" value={interval.end} onChange={e => update({ end: e.target.value })} />
-              <Button className="pool-settings-remove" aria-label={`Удалить интервал ${index + 1}`} size="sm" variant="ghost" onClick={() => { setCustomIntervals([]); change({ schedule: { ...draft.schedule!, intervals: draft.schedule!.intervals.filter((_,i) => i !== index) } }); }}><span aria-hidden="true">×</span></Button>
+              <Button className="pool-settings-remove" aria-label={`Remove интервал ${index + 1}`} size="sm" variant="ghost" onClick={() => { setCustomIntervals([]); change({ schedule: { ...draft.schedule!, intervals: draft.schedule!.intervals.filter((_,i) => i !== index) } }); }}><span aria-hidden="true">×</span></Button>
             </div>
             {custom && <div className="pool-settings-days">{['Вс','Пн','Вт','Ср','Чт','Пт','Сб'].map((name,day) => <label key={day} className="pool-settings-toggle"><input type="checkbox" checked={interval.days.includes(day)} onChange={e => update({ days: e.target.checked ? [...interval.days,day] : interval.days.filter(d => d !== day) })} />{name}</label>)}</div>}
           </div>;
         })}
         <Button size="sm" variant="outline" onClick={() => change({ schedule: { ...draft.schedule!, intervals: [...draft.schedule!.intervals, { days: [1,2,3,4,5], start: '09:00', end: '18:00' }] } })}>Добавить интервал</Button>
-        <p className="pool-settings-help">Дни относятся к началу интервала. 20:00–08:00 заканчивается на следующий день. Без интервалов аккаунт недоступен. Вне расписания новые запросы не запускаются, кроме режима «Использовать до исчерпания».</p>
+        <p className="pool-settings-help">Дни относятся к началу интервала. 20:00–08:00 заканчивается на следующий день. Без интервалов аккаунт недоступен. Outside schedule новые запросы не запускаются, кроме режима «Use until exhausted».</p>
       </div>}
     </fieldset>
-    {account.drainOnce && <p className="text-sm">До исчерпания: защита остатка и расписание временно отключены.</p>}
-    <p className="pool-settings-help">Изменения сохраняются автоматически. Режим «Использовать до исчерпания» временно отменяет общий и индивидуальный запас квоты, расписание и ограничения по проектам. После первого исчерпанного лимита режим выключается.</p>
+    {account.drainOnce && <p className="text-sm">Until exhausted: защита остатка и расписание временно отключены.</p>}
+    <p className="pool-settings-help">Изменения сохраняются автоматически. Режим «Use until exhausted» временно отменяет общий и индивидуальный запас квоты, расписание и ограничения по проектам. После первого исчерпанного лимита режим выключается.</p>
     {error ? <><p role="alert" className="pool-settings-error">{error}</p><Button size="sm" onClick={() => setError('')}>Повторить сохранение</Button></> :
       <p role="status" className="pool-settings-status">{pending ? 'Сохранение…' : dirty ? 'Ожидание сохранения…' : saved ? 'Настройки сохранены' : 'Все изменения сохранены'}</p>}
 

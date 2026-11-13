@@ -22,7 +22,7 @@ export function AccountEmailForm({email,save,onUnsavedChange}:{email:string|null
    <input aria-label="Email аккаунта" className="pool-settings-control" type="email" value={draft} maxLength={254} disabled={pending} onChange={e=>setDraft(e.target.value)}/>
   </label>
   <p className="pool-settings-help">Для API-ключа адрес указывается вручную. Провайдер его не подтверждает.</p>
-  <Button size="sm" variant="outline" disabled={!dirty||pending} onClick={()=>void submit()}>{pending?'Сохраняем…':'Сохранить email'}</Button>
+  <Button size="sm" variant="outline" disabled={!dirty||pending} onClick={()=>void submit()}>{pending?'Сохраняем…':'Save email'}</Button>
   <Button size="sm" variant="ghost" disabled={pending||(!dirty&&baseline===email)} onClick={()=>{setBaseline(email);setDraft(email??'');setError('');}}>Сбросить</Button>
   {error&&<p role="alert" className="pool-settings-error">{error}</p>}
  </section>;

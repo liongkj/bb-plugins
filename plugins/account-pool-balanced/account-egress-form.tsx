@@ -20,7 +20,7 @@ export function EgressControl({accountId,provider,state,pending,error,save}:{
          const profile=state?.profiles.find(p=>`${p.id}:${p.version}`===event.target.value);
          save(profile?{id:profile.id,version:profile.version}:null);
        }}>
-       <option value="">Текущий маршрут Pooler</option>
+       <option value="">Current маршрут Pooler</option>
        {state?.profiles.map(p=><option key={`${p.id}:${p.version}`} value={`${p.id}:${p.version}`}>{p.label} · версия {p.version}</option>)}
      </select>
    </label>
@@ -37,8 +37,8 @@ export function ProxyControl({pending,save}:{pending:boolean;save:(url:string)=>
      <input className="pool-settings-control" style={{width:'100%'}} maxLength={4096} type="password" autoComplete="new-password" aria-label="Прокси аккаунта"
        placeholder="http://user:password@proxy.example:8080" value={url} disabled={pending} onChange={event=>setUrl(event.target.value)}/>
    </label>
-   <p className="pool-settings-help">Адрес и пароль сохраняются на сервере. Модельные запросы, квоты и обновление входа идут через этот прокси. При отказе прямого обхода нет. SOCKS не поддерживается. Для новых разговоров; начатые сохраняют прежний маршрут.</p>
-   <Button size="sm" type="submit" disabled={pending||!url.trim()}>Сохранить прокси</Button>
+   <p className="pool-settings-help">Адрес и пароль сохраняются на сервере. Модельные запросы, квоты и обновление входа идут in этот прокси. При отказе прямого обхода нет. SOCKS не поддерживается. Для новых разговоров; начатые сохраняют прежний маршрут.</p>
+   <Button size="sm" type="submit" disabled={pending||!url.trim()}>Save прокси</Button>
  </form>;
 }
 export function AccountEgressForm({accountId,provider}:{accountId:string;provider:PoolProvider}){

@@ -9,7 +9,7 @@ it('prefills unsaved personal settings from global values before enabling', asyn
   const save = vi.fn().mockResolvedValue(undefined);
   const fresh = { ...account, provider: 'claude', role: 'reserve', policy: undefined } as AccountSummary;
   render(<AccountPolicyForm account={fresh} threshold={.875} drainHours={36} save={save} />);
-  const fiveHour = screen.getByRole('spinbutton', { name: /Оставлять квоту 5 часов/ }) as HTMLInputElement;
+  const fiveHour = screen.getByRole('spinbutton', { name: /Оставлять квоту 5 hours/ }) as HTMLInputElement;
   const weekly = screen.getByRole('spinbutton', { name: /Оставлять недельную квоту/ }) as HTMLInputElement;
   expect(fiveHour.value).toBe('12.5');
   expect(weekly.value).toBe('12.5');
@@ -30,7 +30,7 @@ it('restores saved disabled settings when enabled again', async () => {
 it('saves disabled override without losing personal values and hides absent five-hour quota', async () => {
   const save = vi.fn().mockResolvedValue(undefined);
   render(<AccountPolicyForm account={account} threshold={.98} drainHours={24} save={save} />);
-  expect(screen.queryByText('Оставлять квоту 5 часов, %')).toBeNull();
+  expect(screen.queryByText('Оставлять квоту 5 hours, %')).toBeNull();
   fireEvent.click(screen.getByLabelText('Индивидуальные настройки'));
 
   await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ enabled:false, weeklyKeep:50 })));
@@ -49,7 +49,7 @@ it('coalesces edits, does not save on mount, and retries failed changes', async 
   const save = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
   render(<AccountPolicyForm account={account} threshold={.98} drainHours={24} save={save} />);
   expect(save).not.toHaveBeenCalled();
-  expect(screen.queryByText('Сохранить настройки')).toBeNull();
+  expect(screen.queryByText('Save настройки')).toBeNull();
   fireEvent.change(screen.getByDisplayValue('50'), { target: { value: '40' } });
   fireEvent.change(screen.getByDisplayValue('40'), { target: { value: '30' } });
   await screen.findByRole('alert');
