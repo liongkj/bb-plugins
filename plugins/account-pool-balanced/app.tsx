@@ -253,9 +253,9 @@ function windowShortLabel(
     return window.slot === "primary" ? "LIMIT" : "LIMIT 2";
   }
   if (window.windowMinutes % 1_440 === 0)
-    return `${window.windowMinutes / 1_440}Д`;
-  if (window.windowMinutes % 60 === 0) return `${window.windowMinutes / 60}Ч`;
-  return `${window.windowMinutes}М`;
+    return `${window.windowMinutes / 1_440}D`;
+  if (window.windowMinutes % 60 === 0) return `${window.windowMinutes / 60}H`;
+  return `${window.windowMinutes}M`;
 }
 function windowLongLabel(
   window: LimitWindow,
@@ -268,9 +268,9 @@ function windowLongLabel(
   }
   if (window.windowMinutes === 7 * 24 * 60) return "Week";
   if (window.windowMinutes % 1_440 === 0)
-    return `${window.windowMinutes / 1_440} дн`;
-  if (window.windowMinutes % 60 === 0) return `${window.windowMinutes / 60} ч`;
-  return `${window.windowMinutes} мин`;
+    return `${window.windowMinutes / 1_440} d`;
+  if (window.windowMinutes % 60 === 0) return `${window.windowMinutes / 60} h`;
+  return `${window.windowMinutes} min`;
 }
 function resetLabel(timestamp: number | null): string {
   if (timestamp === null) return "";
@@ -281,12 +281,12 @@ function resetLabel(timestamp: number | null): string {
     minute: "2-digit",
     hourCycle: "h23",
     timeZone: POOL_TIME_ZONE,
-  }).format(timestamp)} МСК`;
+  }).format(timestamp)} MSK`;
   const remaining = timestamp - Date.now();
   if (remaining <= 0) return "Reset time is stale · refresh quotas";
   const minutes = Math.max(1, Math.round(remaining / 60_000));
   if (minutes < 1_440)
-    return `automatic reset ${exact} (in ${minutes >= 60 ? `${Math.floor(minutes / 60)} ч ${minutes % 60} мин` : `${minutes} мин`})`;
+    return `automatic reset ${exact} (in ${minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`})`;
   return `automatic reset ${exact}`;
 }
 const STATUS_CACHE_KEY = "account-pool:status";
@@ -298,7 +298,7 @@ function savedResetDeadline(timestamp: number | null): string {
     hour: "2-digit", minute: "2-digit", second: "2-digit",
     hourCycle: "h23", timeZone: POOL_TIME_ZONE,
   }).format(timestamp);
-  return `${timestamp <= Date.now() ? "expired" : "valid until"} ${date} МСК`;
+  return `${timestamp <= Date.now() ? "expired" : "valid until"} ${date} MSK`;
 }
 
 function resetLimitLabel(limit: string): string {
@@ -752,7 +752,7 @@ function AddAccountMenu({
           <Icon name="UserRound" className="mt-0.5" />
           <span>
             <span className="block">
-              Вход в {provider === "claude" ? "Claude" : provider === "agy" ? "Antigravity" : provider === "grok" ? "Grok" : "Codex"}
+              Sign in to {provider === "claude" ? "Claude" : provider === "agy" ? "Antigravity" : provider === "grok" ? "Grok" : "Codex"}
             </span>
             <span className="block text-xs text-muted-foreground">
               {provider === "claude"
@@ -770,7 +770,7 @@ function AddAccountMenu({
           <span>
             <span className="block">Import from this machine</span>
             <span className="block text-xs text-muted-foreground">
-              Copies sign-in credentials {provider === "claude" ? "~/.claude" : "Codex"} с
+              Copies sign-in credentials {provider === "claude" ? "~/.claude" : "Codex"} from
               server host
             </span>
           </span>
@@ -1527,9 +1527,9 @@ function AccountPoolSettings() {
     <div className="w-full space-y-6">
       <PoolUpdatePanel />
       <p className="text-xs text-subtle-foreground/75">
-        Хаб {status?.accepting ? "accepting" : "not accepting"} ·{" "}
+        Hub {status?.accepting ? "accepting" : "not accepting"} ·{" "}
         {status?.inFlight ?? 0} in flight · used by {hubHosts}
-        {statusIsCached ? " · обновляю…" : null}
+        {statusIsCached ? " · refreshing…" : null}
         {status?.vpn?.blockedProviders.length ? " · protected providers are blocked by network policy" : null}
       </p>
       <div className="space-y-2">
@@ -1597,7 +1597,7 @@ function AccountPoolSettings() {
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
             or import credentials from this machine using Add account
-            нужного провайдера
+            for the selected provider
           </p>
         </div>
       ) : null}
@@ -1621,7 +1621,7 @@ function AccountPoolSettings() {
           <SettingsSection
             key={provider.id}
             title={provider.title}
-            description={provider.id === "agy" && nativeAccounts?.managed !== false ? "Official client. Google sign-in remains on executor machines; a shared subscription aggregates their quota." : `${provider.description} Active: ${providerAccounts.reduce((n,a)=>n+a.inFlight,0)}; queued: ${providerAccounts.reduce((n,a)=>n+a.queuedRequests,0)}. Предел на аккаунт: ${config?.maxConcurrentRequestsPerAccount ?? 2}.`}
+            description={provider.id === "agy" && nativeAccounts?.managed !== false ? "Official client. Google sign-in remains on executor machines; a shared subscription aggregates their quota." : `${provider.description} Active: ${providerAccounts.reduce((n,a)=>n+a.inFlight,0)}; queued: ${providerAccounts.reduce((n,a)=>n+a.queuedRequests,0)}. Per-account limit: ${config?.maxConcurrentRequestsPerAccount ?? 2}.`}
             action={
               <div className="flex flex-wrap items-center gap-2">
                 <Switch
@@ -1658,7 +1658,7 @@ function AccountPoolSettings() {
                   <SettingsBadge>{!nativeAccounts.managed ? "Managed mode disabled" : account.uncertain > 0 ? "Stop verification required" : account.executors.some(executor => executor.enabled) ? "Configured" : "Executors disabled"}</SettingsBadge>
                 </div>
                 <p className="break-all text-xs text-muted-foreground">Subscription: {account.accountId}</p>
-                <ul className="space-y-1 text-xs text-muted-foreground">{account.executors.map(executor => <li key={executor.id} className="flex flex-wrap items-center gap-2 break-words"><span>{executor.id} · {executor.enabled ? "enabled" : "disabled"} · автопилот {executor.autopilotAllowed ? "разрешён" : "disabled"}</span>{executor.preferred ? <SettingsBadge>Выбран для новых сессий</SettingsBadge> : executor.enabled && nativeAccounts.selectionRevision ? <Button size="sm" disabled={pending !== null} aria-label={`Выбрать ${executor.id}`} onClick={() => void run('native-prefer',async()=>{await rpc.call('native.prefer',{executorId:executor.id,expectedRevision:nativeAccounts.selectionRevision!});await refreshNative();})}>Использовать</Button> : null}</li>)}</ul>
+                <ul className="space-y-1 text-xs text-muted-foreground">{account.executors.map(executor => <li key={executor.id} className="flex flex-wrap items-center gap-2 break-words"><span>{executor.id} · {executor.enabled ? "enabled" : "disabled"} · autopilot {executor.autopilotAllowed ? "allowed" : "disabled"}</span>{executor.preferred ? <SettingsBadge>Preferred for new sessions</SettingsBadge> : executor.enabled && nativeAccounts.selectionRevision ? <Button size="sm" disabled={pending !== null} aria-label={`Select ${executor.id}`} onClick={() => void run('native-prefer',async()=>{await rpc.call('native.prefer',{executorId:executor.id,expectedRevision:nativeAccounts.selectionRevision!});await refreshNative();})}>Use</Button> : null}</li>)}</ul>
                 <p className="text-xs text-muted-foreground">Active: {account.active}; queued: {account.queued}; stop unconfirmed: {account.uncertain}.</p>
                 <p className="text-xs text-muted-foreground">Quota is not measured here. The official client on the executor machine checks authentication state.</p>
               </div>
@@ -1977,7 +1977,7 @@ function AccountPoolSettings() {
                       })
                     }
                   >
-                    Обновить {host.hostName ?? host.hostId}
+                    Refresh {host.hostName ?? host.hostId}
                   </Button>
                 ))}
               </div>
@@ -2070,7 +2070,7 @@ function AccountPoolSettings() {
             </p>
             <Input
               type="number"
-              aria-label="Priority аккаунта"
+              aria-label="Priority account"
               value={priority}
               onChange={(event) => setPriority(event.target.value)}
             />
@@ -2215,7 +2215,7 @@ function AccountPoolSettings() {
         ) : null}
         {dialog?.kind === "api-key" ? (
           <DialogFrame
-            title={dialog.provider === "claude" ? "Add Anthropic API key" : `Добавить ${dialog.provider === "devin" ? "PAT" : "API key"} ${PROVIDERS.find((entry) => entry.id === dialog.provider)?.title ?? dialog.provider}`}
+            title={dialog.provider === "claude" ? "Add Anthropic API key" : `Add ${dialog.provider === "devin" ? "PAT" : "API key"} ${PROVIDERS.find((entry) => entry.id === dialog.provider)?.title ?? dialog.provider}`}
             footer={
               <>
                 <span className="flex-1" />
@@ -2746,7 +2746,7 @@ function LoginDialog({
   const deviceStep = provider === "grok" ? grokStep : codexStep;
   return (
     <DialogFrame
-      title={reauthorizing === null ? `Вход в ${name}` : "Reauthorize Claude"}
+      title={reauthorizing === null ? `Sign in to ${name}` : "Reauthorize Claude"}
       className="sm:max-w-xl"
       footer={
         loginDone !== null ? (
@@ -2775,7 +2775,7 @@ function LoginDialog({
         <div>
           <h3 className="text-base font-semibold">{reauthorizing === null ? "Connected" : "Authentication updated:"} {loginDone}</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            {reauthorizing === null ? `Account добавлен в пул ${name}. Quotas refresh in the background.` : "Settings saved. Disabled accounts remain disabled; role and projects are unchanged."}
+            {reauthorizing === null ? `Account added to the pool ${name}. Quotas refresh in the background.` : "Settings saved. Disabled accounts remain disabled; role and projects are unchanged."}
           </p>
         </div>
       ) : url === undefined ? (

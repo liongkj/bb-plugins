@@ -1,17 +1,17 @@
 {
-  "translated_occurrences": 616,
+  "translated_occurrences": 808,
   "remaining_cyrillic_lines": {
-    "account-egress-form.tsx": 14,
-    "account-email-form.test.tsx": 5,
-    "account-email-form.tsx": 8,
-    "account-policy-form.test.tsx": 19,
-    "account-policy-form.tsx": 25,
-    "account-projects-form.test.tsx": 14,
-    "account-projects-form.tsx": 19,
-    "account-proxy-form.test.tsx": 4,
+    "account-egress-form.tsx": 1,
+    "account-email-form.test.tsx": 0,
+    "account-email-form.tsx": 0,
+    "account-policy-form.test.tsx": 4,
+    "account-policy-form.tsx": 0,
+    "account-projects-form.test.tsx": 0,
+    "account-projects-form.tsx": 0,
+    "account-proxy-form.test.tsx": 0,
     "account-settings-style.tsx": 0,
-    "app.test.tsx": 34,
-    "app.tsx": 21,
-    "pool-update-panel.tsx": 9
+    "app.test.tsx": 10,
+    "app.tsx": 0,
+    "pool-update-panel.tsx": 0
   }
 }
