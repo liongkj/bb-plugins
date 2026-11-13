@@ -752,7 +752,7 @@ function AddAccountMenu({
           <Icon name="UserRound" className="mt-0.5" />
           <span>
             <span className="block">
-              Sign in to  {provider === "claude" ? "Claude" : provider === "agy" ? "Antigravity" : provider === "grok" ? "Grok" : "Codex"}
+              Sign in to {provider === "claude" ? "Claude" : provider === "agy" ? "Antigravity" : provider === "grok" ? "Grok" : "Codex"}
             </span>
             <span className="block text-xs text-muted-foreground">
               {provider === "claude"
@@ -2746,7 +2746,7 @@ function LoginDialog({
   const deviceStep = provider === "grok" ? grokStep : codexStep;
   return (
     <DialogFrame
-      title={reauthorizing === null ? `Sign in to  ${name}` : "Reauthorize Claude"}
+      title={reauthorizing === null ? `Sign in to ${name}` : "Reauthorize Claude"}
       className="sm:max-w-xl"
       footer={
         loginDone !== null ? (
