@@ -1870,7 +1870,8 @@ export class AccountPoolHub {
     if (resetAt!==null) message += upstreamHeld ? ` Повторная попытка не ранее / Retry no earlier than: ${resetAt}.` : ` Сброс / reset: ${resetAt}.`;
     // Match the official pooler's retryable status for quota/cooldown.
     // Policy, authentication and missing-account failures remain non-retryable.
-    const retryable = quotaBlocked || capBlocked || upstreamHeld;
+    const retryable = (adapter.provider === "claude" || adapter.provider === "codex") &&
+      (quotaBlocked || capBlocked || upstreamHeld);
     const retryAfter = resetAt === null ? null
       : String(Math.max(1, Math.ceil((new Date(resetAt).getTime() - now) / 1_000)));
     return this.errorResponse(adapter, request, retryable ? 429 : 403, message, {
