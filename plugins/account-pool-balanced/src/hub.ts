@@ -16,6 +16,7 @@ import { AccountAuthorizationRequiredError } from "./provider-adapter.js";
 import { createVpnPolicy, VpnRequiredError } from "./vpn-policy.js";
 import { isRecoverableAccessError } from "./recoverable-access.js";
 import { projectTier, projectRole } from "./project-policy.js";
+import type { RetryAvailability } from "./retry-contract.js";
 import { policyThresholds, reserveHours, scheduleAllows } from "./account-policy.js";
 import type {
   Account,
@@ -1685,6 +1686,72 @@ export class AccountPoolHub {
 
   private errorResponse(adapter: ProviderAdapter, request: Request, status: number, message: string, headers?: HeadersInit): Response {
     return adapter.errorResponse(status, message, headers, request);
+  }
+
+  /**
+   * BB Provider Retry query. Never refreshes tokens, sends model requests, or
+   * bypasses Balanced's per-account thresholds and project/schedule policy.
+   * Called only after server-side thread/request validation.
+   */
+  async retryAvailability(
+    provider: PoolProvider,
+    family: ModelFamily,
+    projectId: string | null,
+  ): Promise<RetryAvailability> {
+    const now = this.options.now();
+    const accounts = (await this.options.accounts.list()).filter(
+      account => account.provider === provider && account.enabled &&
+        projectTier(account, projectId) !== null,
+    );
+    if (accounts.length === 0)
+      return { kind: "unavailable", reason: "no-enabled-account" };
+
+    const scheduled = accounts.filter(account =>
+      account.drainOnce || scheduleAllows(account.policy, now),
+    );
+    // Do not automatically restart outside an explicit account schedule:
+    // the next schedule opening is not currently exposed as trusted evidence.
+    if (scheduled.length === 0)
+      return { kind: "unavailable", reason: "reset-unknown" };
+
+    const current = this.eligibleEntries(
+      provider, projectId, scheduled, family, now,
+    ).eligible;
+    if (current.some(({ quota }) => (quota.heldUntil ?? 0) <= now))
+      return { kind: "ready" };
+
+    const resetTimes: number[] = [];
+    let unknown = false;
+    let authFailures = 0;
+    const settings = this.options.getSettings();
+    for (const original of scheduled) {
+      const account = { ...original, role: projectRole(original, projectId) };
+      const quota = this.options.quotas.get(account.id);
+      if (quota.error !== null) { authFailures++; continue; }
+      const threshold = policyThresholds(account, settings.switchThreshold);
+      const exhausted = !account.drainOnce &&
+        isQuotaExhausted(quota, family, threshold, now);
+      const resetAt = exhausted
+        ? blockingResetAt(quota, family, threshold, now)
+        : now;
+      if (resetAt === null) { unknown = true; continue; }
+      const retryAt = Math.max(resetAt, quota.heldUntil ?? 0);
+      if (retryAt <= now) {
+        // A reserve gate, project role, or policy rather than a quota reset
+        // blocked this account; do not claim a retry time we cannot prove.
+        unknown = true;
+      } else {
+        resetTimes.push(retryAt);
+      }
+    }
+    if (resetTimes.length > 0)
+      return { kind: "blocked", retryAt: Math.min(...resetTimes) };
+    return {
+      kind: "unavailable",
+      reason: authFailures === scheduled.length
+        ? "authentication"
+        : unknown ? "reset-unknown" : "source-unavailable",
+    };
   }
 
   private noEligibleResponse(
