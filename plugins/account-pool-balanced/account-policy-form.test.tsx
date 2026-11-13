@@ -9,12 +9,12 @@ it('prefills unsaved personal settings from global values before enabling', asyn
   const save = vi.fn().mockResolvedValue(undefined);
   const fresh = { ...account, provider: 'claude', role: 'reserve', policy: undefined } as AccountSummary;
   render(<AccountPolicyForm account={fresh} threshold={.875} drainHours={36} save={save} />);
-  const fiveHour = screen.getByRole('spinbutton', { name: /Оставлять квоту 5 hours/ }) as HTMLInputElement;
-  const weekly = screen.getByRole('spinbutton', { name: /Оставлять недельную квоту/ }) as HTMLInputElement;
+  const fiveHour = screen.getByRole('spinbutton', { name: /Preserve 5-hour quota/ }) as HTMLInputElement;
+  const weekly = screen.getByRole('spinbutton', { name: /Preserve weekly quota/ }) as HTMLInputElement;
   expect(fiveHour.value).toBe('12.5');
   expect(weekly.value).toBe('12.5');
   expect(fiveHour.disabled || fiveHour.closest('fieldset')?.disabled).toBe(true);
-  expect((screen.getByRole('spinbutton', { name: /Подключать reserve/ }) as HTMLInputElement).value).toBe('36');
+  expect((screen.getByRole('spinbutton', { name: /Activate reserve/ }) as HTMLInputElement).value).toBe('36');
   expect(save).not.toHaveBeenCalled();
   fireEvent.click(screen.getByLabelText('Account-specific settings'));
   await waitFor(() => expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: true, fiveHourKeep: 12.5, weeklyKeep: 12.5, reserveDrainHours: 36 })));
@@ -49,7 +49,7 @@ it('coalesces edits, does not save on mount, and retries failed changes', async 
   const save = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
   render(<AccountPolicyForm account={account} threshold={.98} drainHours={24} save={save} />);
   expect(save).not.toHaveBeenCalled();
-  expect(screen.queryByText('Save настройки')).toBeNull();
+  expect(screen.queryByText('Settings saved')).toBeNull();
   fireEvent.change(screen.getByDisplayValue('50'), { target: { value: '40' } });
   fireEvent.change(screen.getByDisplayValue('40'), { target: { value: '30' } });
   await screen.findByRole('alert');
