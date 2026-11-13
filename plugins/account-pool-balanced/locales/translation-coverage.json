@@ -1,0 +1,13 @@
+{
+  "translated_occurrences": 505,
+  "remaining_cyrillic_lines": {
+    "account-egress-form.tsx": 0,
+    "account-email-form.tsx": 0,
+    "account-policy-form.tsx": 0,
+    "account-projects-form.tsx": 0,
+    "account-settings-style.tsx": 0,
+    "app.tsx": 0,
+    "pool-update-panel.tsx": 0,
+    "src/account-policy.ts": 0
+  }
+}
