@@ -1,0 +1,232 @@
+import { poolErrorResponse } from "./pool-errors.js";
+import { z } from "zod";
+import type { AccountSecret } from "./contracts.js";
+import {
+  importClaudeCredentials,
+  type ImportedClaudeCredentials,
+} from "./credentials.js";
+import type { ProviderAdapter } from "./provider-adapter.js";
+import {
+  fetchOAuthRefresh,
+  AccountAuthorizationRequiredError,
+  filterRequestHeaders,
+  mountedUpstreamUrl,
+  oauthSecretDueForRefresh,
+} from "./provider-adapter.js";
+import {
+  epochMilliseconds,
+  isQuotaRejection,
+  quotaFromHeaders,
+} from "./quota.js";
+import { parseRequestBody } from "./request-body.js";
+import { quotaFromUsage } from "./usage.js";
+import { claudeResetCredits } from "./claude-reset-credits.js";
+
+const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const OAUTH_BETA = "oauth-2025-04-20";
+const USAGE_REQUEST_TIMEOUT_MS = 10_000;
+// The OAuth usage endpoint uses the CLI surface to determine reset eligibility.
+const USAGE_USER_AGENT = "claude-cli/2.1.282 (external, cli) bb-account-pool";
+const ALLOWED_REQUEST_HEADERS = new Set([
+  "accept",
+  "content-type",
+  "user-agent",
+  "x-app",
+]);
+const ALLOWED_REQUEST_HEADER_PREFIXES = ["anthropic-", "x-stainless-"];
+
+const refreshResponseSchema = z
+  .object({
+    access_token: z.string().min(1),
+    refresh_token: z.string().min(1).optional(),
+    expires_in: z.number().positive().optional(),
+    expires_at: z.number().positive().optional(),
+  })
+  .passthrough();
+
+const profileResponseSchema = z
+  .object({
+    account: z
+      .object({ uuid: z.string().uuid().nullish() })
+      .passthrough()
+      .nullish(),
+  })
+  .passthrough();
+
+export function createClaudeAdapter(options: {
+  refreshUrl: string;
+  usageUrl: string;
+  profileUrl: string;
+  importCredentials?: () => Promise<ImportedClaudeCredentials>;
+}): ProviderAdapter {
+  return {
+    provider: "claude",
+    upstreamName: "Anthropic",
+    inboundToken: (headers) => headers.get("x-api-key"),
+    async importAccount() {
+      const imported = await (
+        options.importCredentials ?? importClaudeCredentials
+      )();
+      return {
+        label: imported.email ?? "Claude Code account",
+        email: imported.email,
+        ...(imported.accountUuid === null
+          ? {}
+          : { accountUuid: imported.accountUuid }),
+        subscriptionType: imported.subscriptionType,
+        rateLimitTier: imported.rateLimitTier,
+        secret: {
+          kind: "oauth",
+          accessToken: imported.accessToken,
+          refreshToken: imported.refreshToken,
+          expiresAt: imported.expiresAt,
+        },
+      };
+    },
+    parseRequest(body) {
+      const parsed = parseRequestBody(body);
+      return {
+        model: parsed.model,
+        family: parsed.family,
+        affinityId: parsed.affinityId,
+        parentAffinityId: parsed.parentAffinityId,
+        forAccount: (account) => parsed.forAccount(account.accountUuid),
+      };
+    },
+    upstreamUrl: (request, settings) =>
+      mountedUpstreamUrl(request, settings.anthropicUpstreamBaseUrl),
+    requestHeaders(inbound, _account, secret) {
+      const headers = filterRequestHeaders(
+        inbound,
+        ALLOWED_REQUEST_HEADERS,
+        ALLOWED_REQUEST_HEADER_PREFIXES,
+      );
+      if (secret.kind === "oauth") {
+        headers.set("authorization", `Bearer ${secret.accessToken}`);
+      } else {
+        headers.set("x-api-key", secret.apiKey);
+      }
+      return headers;
+    },
+    quotaFromHeaders,
+    isQuotaRejection,
+    async refreshSecret(context) {
+      const secret = oauthSecretDueForRefresh(context);
+      if (secret === null) return { secret: context.secret, refreshed: false };
+      const parsed = refreshResponseSchema.parse(
+        JSON.parse(
+          await fetchOAuthRefresh(context, options.refreshUrl, {
+            grant_type: "refresh_token",
+            refresh_token: secret.refreshToken,
+            client_id: OAUTH_CLIENT_ID,
+          }),
+        ),
+      );
+      const rawExpiresAt =
+        parsed.expires_at ??
+        (parsed.expires_in === undefined
+          ? context.now() + 60 * 60 * 1_000
+          : context.now() + parsed.expires_in * 1_000);
+      const refreshed: AccountSecret = {
+        kind: "oauth",
+        accessToken: parsed.access_token,
+        refreshToken: parsed.refresh_token ?? secret.refreshToken,
+        expiresAt: epochMilliseconds(rawExpiresAt),
+        ...(secret.idToken === undefined ? {} : { idToken: secret.idToken }),
+      };
+      await context.accounts.writeSecret(context.account.id, refreshed);
+      return { secret: refreshed, refreshed: true };
+    },
+    async refreshUsage(context) {
+      context.quotas.put({...context.quotas.get(context.account.id),providerBudgetEvidence:undefined});
+      if (context.account.kind !== "oauth") return;
+      let secret = await context.freshSecret();
+      if (secret.kind !== "oauth") return;
+      let accessToken = secret.accessToken;
+      const usageUrl = new URL(options.usageUrl);
+      if (usageUrl.protocol === "https:" || usageUrl.protocol === "http:") {
+        usageUrl.searchParams.set("cedar_ember", "1");
+        usageUrl.searchParams.set("skip_spend", "1");
+      }
+      const requestUsage = (url: string | URL) => context.fetch(url, {
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          "anthropic-beta": OAUTH_BETA,
+          accept: "application/json",
+          "user-agent": USAGE_USER_AGENT,
+          "x-app": "cli",
+        },
+        signal: AbortSignal.timeout(USAGE_REQUEST_TIMEOUT_MS),
+      });
+      const requestCompatibleUsage = async () => {
+        let response = await requestUsage(usageUrl);
+        // Compatibility fallback is separate from access-token recovery.
+        if (usageUrl.href !== options.usageUrl && [400, 404, 422].includes(response.status)) {
+          await response.body?.cancel();
+          response = await requestUsage(options.usageUrl);
+        }
+        return response;
+      };
+      let response = await requestCompatibleUsage();
+      if (response.status === 401) {
+        await response.body?.cancel();
+        secret = await context.freshSecret(secret.accessToken);
+        if (secret.kind !== "oauth") return;
+        accessToken = secret.accessToken;
+        response = await requestCompatibleUsage();
+        if (response.status === 401) {
+          await response.body?.cancel();
+          throw new AccountAuthorizationRequiredError(
+            "Claude usage authorization failed with HTTP 401 after refreshing access.",
+          );
+        }
+      }
+      if (response.ok) {
+        const payload = await response.json().catch(() => null);
+        const resets = claudeResetCredits(payload, context.now());
+        if (resets === null) context.quotas.clearResetCredits(context.account.id);
+        else context.quotas.putResetCredits(context.account.id, resets);
+        if (typeof payload === "object" && payload !== null) {
+          const quota = quotaFromUsage(
+            context.account.id,
+            payload,
+            context.quotas.get(context.account.id),
+            context.now(),
+          );
+          if (quota !== null) context.quotas.put({ ...quota, error: null });
+        }
+      } else {
+        const status = response.status;
+        await response.body?.cancel();
+        // Never acknowledge a failed collector as a successful quota refresh.
+        // Expose only the status, not the upstream body, URL or credentials.
+        throw new Error(`Claude usage refresh failed with HTTP ${status}.`);
+      }
+      if (context.account.accountUuid !== null) return;
+      const profile = await context.fetch(options.profileUrl, {
+        headers: {
+          authorization: `Bearer ${secret.accessToken}`,
+          "anthropic-beta": OAUTH_BETA,
+          accept: "application/json",
+        },
+        signal: AbortSignal.timeout(USAGE_REQUEST_TIMEOUT_MS),
+      });
+      if (!profile.ok) {
+        await profile.body?.cancel();
+        return;
+      }
+      const parsed = profileResponseSchema.safeParse(
+        await profile.json().catch(() => null),
+      );
+      const accountUuid = parsed.success
+        ? (parsed.data.account?.uuid ?? null)
+        : null;
+      if (accountUuid !== null) {
+        await context.accounts.setAccountUuid(context.account.id, accountUuid);
+      }
+    },
+    errorResponse(status, message, headers, request) {
+      return poolErrorResponse("claude", status, message, headers, request);
+    },
+  };
+}

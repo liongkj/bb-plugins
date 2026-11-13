@@ -1,0 +1,983 @@
+import type {PoolMaintenance} from './maintenance.js';
+import {z} from 'zod';
+import type {CursorStream} from './network-flights.js';
+import {guardProbeSchema,type GuardProbeInput, type runGuardProbe} from './guard-server.js';
+import type { AccountEgress } from "./account-egress.js";
+import type { BbPluginApi, PluginCliResult } from "@get-bb/plugin-sdk";
+import { setTimeout as wait } from "node:timers/promises";
+import {
+  accountAddInputSchema,
+  providerReadinessSchema,
+  accountProjectsSchema,
+  accountCapInputSchema,
+  accountIdInputSchema,
+  accountRoleInputSchema,
+  accountPriorityInputSchema,
+  accountReorderInputSchema,
+  accountPoolConfigSetInputSchema,
+  bypassInputSchema,
+  codexLoginPollInputSchema,
+  loginCompleteInputSchema,
+  modelFamilySchema,
+  tokenRotateInputSchema,
+  routingSetInputSchema,
+  type AccountPoolConfig,
+  type AccountPoolConfigController,
+  type AccountPoolConfigSetInput,
+  type AccountSummary,
+  type FamilyQuota,
+  type LimitWindow,
+  type ModelFamily,
+  type PoolStatusReport,
+} from "./contracts.js";
+import type { PoolOperations } from "./operations.js";
+import type {createBrowserRouter} from "./browser-host.js";
+import { listBrowserProfiles, openAccountBrowser } from "./browser-profiles.js";
+import type { ClaudeOAuthLogin } from "./oauth-login.js";
+import type { CodexDeviceLogin } from "./codex-device-login.js";
+import type { GrokDeviceLogin } from "./grok-device-login.js";
+import type { ExternalClients } from "./external-clients.js";
+import type {NativeSessions} from './native-sessions.js';
+
+interface ParsedFlags {
+  booleans: Set<string>;
+  values: Map<string, string>;
+}
+
+const HELP = [
+  "  bb pool maintenance <status|acquire|interrupt|release> [--owner <uuid>] --json",
+  "Usage:",
+  "  bb pool egress status --json",
+  "  bb pool egress configure <profile-json>",
+  "  bb pool egress bind <account-id> <profile-id> <version>",
+  "  bb pool egress unbind <account-id>",
+  "  bb pool account add --provider claude --import [--label <text>] [--priority <n>]",
+  "  bb pool account add --provider codex --import [--label <text>] [--priority <n>]",
+  "  bb pool account add --provider claude --login",
+  "  bb pool account add --provider codex --login",
+  "  bb pool account add --provider grok --login",
+  "  bb pool account login-poll --session <id> [--provider codex|grok]",
+  "  printf '%s\\n' \"$CLAUDE_AUTH_CODE\" | bb pool account login-complete --session <id> --code-stdin",
+  "  bb pool account add --provider claude --api-key-stdin [--label <text>] [--priority <n>]",
+  "  bb pool account add --provider <kimi|zai|opencode-go|neuraldeep|cursor|devin|grok> --api-key-stdin [--label <text>] [--priority <n>]",
+  "  bb pool account add --provider claude --api-key <key> [--label <text>] [--priority <n>]  Unsafe: exposes the key in process arguments.",
+  "  bb pool account list [--json]",
+  "  bb pool account remove <id>",
+  "  bb pool account enable <id>",
+  "  bb pool account disable <id>",
+  "  bb pool account priority <id> <n>",
+  "  bb pool account role <id> <primary|reserve>",
+  '  bb pool account projects <id> <JSON|off>',
+  "  bb pool account cap <id> <early> <late>",
+  "  bb pool account cap <id> off",
+  "  bb pool account reorder <claude|codex|kimi|zai|opencode-go|neuraldeep|agy|cursor|devin|grok> <id>...",
+  "  bb pool account refresh <id>",
+  "  bb pool status [--json]",
+  "  bb pool readiness [--project <id>] [--json]",
+  '  bb pool native status --json',
+  '  bb pool native configure <executor-json>',
+  '  bb pool native prefer <executor-id>',
+  '  bb pool native mode <managed|off>',
+  '  bb pool native attest-stopped <lease-id> --confirmed',
+  "  bb pool stream-probe --thread <id> [--interrupt-request <uuid> --confirm] [--json]",
+  "  bb pool observations [--json]",
+  "  bb pool guard-probe --provider cursor [--delay-stage guard-rpc] [--delay-ms 4100] [--delay-attempts first|all] [--json]",
+  "  bb pool history [--offset <0..8192>] [--limit <1..200>] [--json]",
+  "  bb pool routing <claude|codex|kimi|zai|opencode-go|neuraldeep|agy|cursor|devin|grok> [--off]",
+  "  bb pool config",
+"  bb pool config set <anthropicUpstreamBaseUrl|codexUpstreamBaseUrl|kimiUpstreamBaseUrl|zaiUpstreamBaseUrl|opencodeGoUpstreamBaseUrl|opencodeFreeUpstreamBaseUrl|neuraldeepUpstreamBaseUrl|cursorUpstreamBaseUrl|devinUpstreamBaseUrl|grokUpstreamBaseUrl|maxConcurrentRequestsPerAccount|claudeRequestStartIntervalMs|switchThreshold|routingStrategy|reserveDrainHours|restDays|vpnOnlyProviders|vpnStatusFile|browserHostId|vpnGuardEnabled> <value>",
+  "  bb pool token rotate --machine <id-or-name>",
+  "  bb pool client add <name> --output <new-private-file-on-server> [--project <project-id>] [--purpose autopilot]",
+  "  bb pool client revoke <name>",
+  "  bb pool bypass <thread-id> [--off]",
+  "  bb pool browser open <id|email|label> [--url <url>]",
+  "  bb pool browser list [--json]",
+  "",
+  "Accounts run sequentially by priority, then order added. The current fallback stays active until unavailable.",
+  "Reorder includes every account for the provider and changes the next failover sequence; existing conversations stay pinned.",
+].join("\n");
+
+function parseFlags(
+  argv: readonly string[],
+  allowedBooleans: readonly string[],
+  allowedValues: readonly string[],
+): ParsedFlags {
+  const booleans = new Set<string>();
+  const values = new Map<string, string>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === undefined || !arg.startsWith("--")) {
+      throw new Error(`Unexpected argument ${JSON.stringify(arg)}.`);
+    }
+    const name = arg.slice(2);
+    if (booleans.has(name) || values.has(name)) {
+      throw new Error(`Duplicate flag --${name}.`);
+    }
+    if (allowedBooleans.includes(name)) {
+      booleans.add(name);
+      continue;
+    }
+    if (!allowedValues.includes(name))
+      throw new Error(`Unknown flag --${name}.`);
+    const value = argv[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error(`--${name} requires a value.`);
+    }
+    values.set(name, value);
+    index += 1;
+  }
+  return { booleans, values };
+}
+
+function formatReset(value: number | null): string {
+  return value === null ? "-" : new Date(value).toISOString();
+}
+
+function formatUtilization(value: number | null): string {
+  return value === null ? "-" : `${Math.round(value * 100)}%`;
+}
+
+function familyLabel(family: ModelFamily): string {
+  return family[0]?.toUpperCase() + family.slice(1);
+}
+
+function formatWindowLabel(window: LimitWindow): string {
+  if (window.windowMinutes === null) return window.slot;
+  if (window.windowMinutes % 1_440 === 0)
+    return `${window.windowMinutes / 1_440}d`;
+  if (window.windowMinutes % 60 === 0) return `${window.windowMinutes / 60}h`;
+  return `${window.windowMinutes}m`;
+}
+
+function formatLimitWindows(windows: readonly LimitWindow[]): string {
+  if (windows.length === 0) return "-";
+  return windows
+    .map(
+      (window) =>
+        `${formatWindowLabel(window)}=${formatUtilization(window.utilization)} ${formatReset(window.resetAt)}`,
+    )
+    .join("; ");
+}
+
+function formatFamilyQuota(quota: FamilyQuota | null): string {
+  if (quota === null) return "-";
+  return [
+    formatUtilization(quota.utilization),
+    quota.status ?? "-",
+    formatReset(quota.resetAt),
+    quota.source,
+  ].join(" ");
+}
+
+function formatAccounts(accounts: readonly AccountSummary[]): string {
+  if (accounts.length === 0) return "No accounts configured.";
+  const families = modelFamilySchema.options.filter((family) =>
+    accounts.some((account) => account.familyWeekly[family] !== null),
+  );
+  return [
+    [
+      "ID",
+      "Label",
+      "Email",
+      "Provider",
+      "Kind",
+      "Enabled",
+      "Priority",
+      "Role",
+      "Cap",
+      "5h",
+      "5h reset",
+      "7d",
+      "7d reset",
+      "Windows",
+      ...families.map(familyLabel),
+      "Status",
+    ].join("\t"),
+    ...accounts.map((account) =>
+      [
+        account.id,
+        account.label,
+        account.email ?? "-",
+        account.provider,
+        account.kind,
+        String(account.enabled),
+        String(account.priority),
+        account.role,
+        formatCap(account.cap),
+        formatUtilization(account.fiveHourUtilization),
+        formatReset(account.fiveHourResetAt),
+        formatUtilization(account.sevenDayUtilization),
+        formatReset(account.sevenDayResetAt),
+        formatLimitWindows(account.limitWindows),
+        ...families.map((family) =>
+          formatFamilyQuota(account.familyWeekly[family]),
+        ),
+        account.status,
+      ].join("\t"),
+    ),
+  ].join("\n");
+}
+
+function formatStatus(status: PoolStatusReport): string {
+  return [
+    `Route: ${status.route}`,
+    `Accepting: ${status.accepting}`,
+    `Enabled accounts: ${status.enabledAccountCount}`,
+    `In flight: ${status.inFlight}`,
+    "",
+    "Machine tokens:",
+    ...(status.hosts.length === 0
+      ? ["None minted."]
+      : status.hosts.map(
+          (host) =>
+            `${host.hostName ?? host.hostId}\t${new Date(host.mintedAt).toISOString()}\t${host.lastUsedAt === null ? "never" : new Date(host.lastUsedAt).toISOString()}`,
+        )),
+    "",
+    "Recently routed threads without a local Claude login:",
+    ...(status.routedThreadsWithoutLocalLogin.length === 0
+      ? ["None."]
+      : status.routedThreadsWithoutLocalLogin.map(
+          (thread) =>
+            `${thread.threadId}\t${thread.hostName ?? thread.hostId}\t${thread.localClaudeStatus}`,
+        )),
+    "",
+    formatAccounts(status.accounts),
+  ].join("\n");
+}
+
+function formatConfig(config: AccountPoolConfig): string {
+  return [
+    `anthropicUpstreamBaseUrl: ${config.anthropicUpstreamBaseUrl}`,
+    `codexUpstreamBaseUrl: ${config.codexUpstreamBaseUrl}`,
+    `kimiUpstreamBaseUrl: ${config.kimiUpstreamBaseUrl}`,
+    `zaiUpstreamBaseUrl: ${config.zaiUpstreamBaseUrl}`,
+    `opencodeGoUpstreamBaseUrl: ${config.opencodeGoUpstreamBaseUrl}`,
+    `opencodeFreeUpstreamBaseUrl: ${config.opencodeFreeUpstreamBaseUrl}`,
+    `neuraldeepUpstreamBaseUrl: ${config.neuraldeepUpstreamBaseUrl}`,
+    `cursorUpstreamBaseUrl: ${config.cursorUpstreamBaseUrl}`,
+    `devinUpstreamBaseUrl: ${config.devinUpstreamBaseUrl}`,
+    `grokUpstreamBaseUrl: ${config.grokUpstreamBaseUrl}`,
+    `vpnGuardEnabled: ${config.vpnGuardEnabled}`,
+    `vpnOnlyProviders: ${config.vpnOnlyProviders.join(",") || "none"}`,
+    `vpnStatusFile: ${config.vpnStatusFile ?? "default local guard file"}`,
+    `browserHostId: ${config.browserHostId ?? "local"}`,
+    `maxConcurrentRequestsPerAccount: ${config.maxConcurrentRequestsPerAccount}`,
+    `claudeRequestStartIntervalMs: ${config.claudeRequestStartIntervalMs}`,
+    `switchThreshold: ${config.switchThreshold}`,
+    `routingStrategy: ${config.routingStrategy}`,
+    `reserveDrainHours: ${config.reserveDrainHours}`,
+    `restDays: ${config.restDays.length === 0 ? "none" : config.restDays.join(",")}`,
+  ].join("\n");
+}
+
+function formatCap(cap: AccountSummary["cap"]): string {
+  return cap === null
+    ? "-"
+    : `${formatUtilization(cap.early)}->${formatUtilization(cap.late)}`;
+}
+
+function parseConfigUpdate(
+  key: string | undefined,
+  value: string | undefined,
+): AccountPoolConfigSetInput {
+  if (value === undefined) throw new Error(HELP);
+  if (key === "anthropicUpstreamBaseUrl") {
+    return accountPoolConfigSetInputSchema.parse({
+      anthropicUpstreamBaseUrl: value,
+    });
+  }
+  if (key === "codexUpstreamBaseUrl") {
+    return accountPoolConfigSetInputSchema.parse({
+      codexUpstreamBaseUrl: value,
+    });
+  }
+  if (key === "kimiUpstreamBaseUrl") {
+    return accountPoolConfigSetInputSchema.parse({
+      kimiUpstreamBaseUrl: value,
+    });
+  }
+  if (key === "zaiUpstreamBaseUrl") {
+    return accountPoolConfigSetInputSchema.parse({
+      zaiUpstreamBaseUrl: value,
+    });
+  }
+  if (key === "neuraldeepUpstreamBaseUrl") return accountPoolConfigSetInputSchema.parse({ neuraldeepUpstreamBaseUrl: value });
+  if (key === "opencodeFreeUpstreamBaseUrl") {
+    return {
+      opencodeFreeUpstreamBaseUrl: value,
+    };
+  }
+  if (key === "opencodeGoUpstreamBaseUrl") {
+    return accountPoolConfigSetInputSchema.parse({
+      opencodeGoUpstreamBaseUrl: value,
+    });
+  }
+  if (key === "cursorUpstreamBaseUrl") {
+    return accountPoolConfigSetInputSchema.parse({
+      cursorUpstreamBaseUrl: value,
+    });
+  }
+  if (key === "devinUpstreamBaseUrl") {
+    return accountPoolConfigSetInputSchema.parse({ devinUpstreamBaseUrl: value });
+  }
+  if (key === "grokUpstreamBaseUrl") {
+    return accountPoolConfigSetInputSchema.parse({ grokUpstreamBaseUrl: value });
+  }
+  if (key === "claudeRequestStartIntervalMs") {
+    if (!/^\d+$/.test(value)) throw new Error("Expected an integer interval in milliseconds.");
+    return accountPoolConfigSetInputSchema.parse({claudeRequestStartIntervalMs:Number(value)});
+  }
+  if (key === "maxConcurrentRequestsPerAccount") return accountPoolConfigSetInputSchema.parse({maxConcurrentRequestsPerAccount:Number(value)});
+  if (key === "switchThreshold") {
+    return accountPoolConfigSetInputSchema.parse({
+      switchThreshold: Number(value),
+    });
+  }
+  if (key === "routingStrategy") {
+    return accountPoolConfigSetInputSchema.parse({ routingStrategy: value });
+  }
+  if (key === "reserveDrainHours") {
+    return accountPoolConfigSetInputSchema.parse({
+      reserveDrainHours: Number(value),
+    });
+  }
+  if (key === "vpnGuardEnabled" && ["true","false"].includes(value)) return accountPoolConfigSetInputSchema.parse({vpnGuardEnabled:value==="true"});
+  if (key === "vpnOnlyProviders") return accountPoolConfigSetInputSchema.parse({ vpnOnlyProviders: value === "none" ? [] : value.split(",") });
+  if (key === "browserHostId") return accountPoolConfigSetInputSchema.parse({browserHostId:value === "local" ? null : value});
+  if (key === "vpnStatusFile") return accountPoolConfigSetInputSchema.parse({ vpnStatusFile: value === "default" ? null : value });
+  if (key === "restDays") {
+    return accountPoolConfigSetInputSchema.parse({
+      restDays:
+        value === "none"
+          ? []
+          : value.split(",").map((day) => (day.trim() === "" ? NaN : Number(day))),
+    });
+  }
+  throw new Error(
+    "Config key must be anthropicUpstreamBaseUrl, codexUpstreamBaseUrl, kimiUpstreamBaseUrl, zaiUpstreamBaseUrl, opencodeGoUpstreamBaseUrl, opencodeFreeUpstreamBaseUrl, neuraldeepUpstreamBaseUrl, cursorUpstreamBaseUrl, devinUpstreamBaseUrl, grokUpstreamBaseUrl, maxConcurrentRequestsPerAccount, claudeRequestStartIntervalMs, switchThreshold, routingStrategy, reserveDrainHours, restDays, vpnOnlyProviders, vpnStatusFile, browserHostId, or vpnGuardEnabled.",
+  );
+}
+
+function json(value: object): string {
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+export function registerPoolCli(
+  bb: Pick<BbPluginApi, "cli" | "server" | "pluginId">,
+  operations: PoolOperations,
+  login: ClaudeOAuthLogin,
+  codexLogin: CodexDeviceLogin,
+  config: AccountPoolConfigController,
+  externalClients?: ExternalClients,
+  browser?: ReturnType<typeof createBrowserRouter>,
+  nativeSessions?: NativeSessions,
+  egress?: AccountEgress,
+  grokLogin?: GrokDeviceLogin,
+  guardProbe?:(input:GuardProbeInput)=>ReturnType<typeof runGuardProbe>,
+  streamProbe?:(threadId:string,requestId?:string)=>{streams:CursorStream[];interrupted?:boolean},
+  maintenance?: Pick<PoolMaintenance,'status'|'acquire'|'release'> & {interrupt:(owner:string)=>Promise<ReturnType<PoolMaintenance['status']>>},
+): void {
+  bb.cli.register({
+    name: "pool",
+    summary:
+      "Manage Claude, Codex, and Grok accounts and inspect the Account Pooler hub",
+    commands: [
+      {name:"egress",summary:"Manage server-owned account egress profiles",usage:"bb pool egress <status|configure|bind|unbind>"},
+      {
+        name: "account-add",
+        summary:
+          "Sign in to Claude, Codex, or Grok; import supported credentials; or add an API key",
+        usage:
+          "bb pool account add --provider <claude|codex|grok> --login\nbb pool account add --provider <claude|codex> --import [--label <text>] [--priority <n>]\nbb pool account add --provider <claude|kimi|zai|opencode-go|cursor|devin|grok> --api-key-stdin [--label <text>] [--priority <n>]\nUnsafe compatibility form: bb pool account add --provider claude --api-key <key> [--label <text>] [--priority <n>]",
+      },
+      {
+        name: "account-login-poll",
+        summary: "Wait for a Codex or Grok device-code login to complete",
+        usage: "bb pool account login-poll --session <id> [--provider codex|grok]",
+      },
+      {
+        name: "account-login-complete",
+        summary: "Complete a Claude browser login with its manual code",
+        usage:
+          "printf '%s\\n' \"$CLAUDE_AUTH_CODE\" | bb pool account login-complete --session <id> --code-stdin",
+      },
+      {
+        name: "account-list",
+        summary: "List pool accounts and observed quota",
+        usage: "bb pool account list [--json]",
+      },
+      {
+        name: "account-remove",
+        summary: "Remove an account and its secret token file",
+        usage: "bb pool account remove <id>",
+      },
+      {
+        name: "account-enable",
+        summary: "Enable an account",
+        usage: "bb pool account enable <id>",
+      },
+      {
+        name: "account-disable",
+        summary: "Disable an account",
+        usage: "bb pool account disable <id>",
+      },
+      {
+        name: "account-priority",
+        summary: "Set an account's position in the failover priority order",
+        usage: "bb pool account priority <id> <n>",
+      },
+      {
+        name: "account-projects",
+        summary: "Set project scope and per-project account roles",
+        usage: "bb pool account projects <id> <JSON|off>",
+      },
+      {
+        name: "account-reorder",
+        summary: "Set the complete failover order for one provider",
+        usage: "bb pool account reorder <claude|codex|kimi|zai|opencode-go|neuraldeep|agy|cursor|devin|grok> <id>...",
+      },
+      {
+        name: "account-refresh",
+        summary: "Refresh one account's observed usage",
+        usage: "bb pool account refresh <id>",
+      },
+      { name:"readiness", summary:"Inspect cached project-scoped pool admission without a model request", usage:"bb pool readiness [--project <id>] [--json]" },
+      {name:"stream-probe",summary:"Inspect one thread or interrupt one exact observed Cursor body",usage:"bb pool stream-probe --thread <id> [--interrupt-request <uuid> --confirm] [--json]"},
+      { name:"guard-probe", summary:"Rehearse read-only Guard admission, optionally delaying only this probe", usage:"bb pool guard-probe --provider cursor [--delay-stage server-host|guard-rpc|server-host-recheck] [--delay-ms 0..4500] [--delay-attempts first|all] [--json]" },
+      { name:"observations", summary:"Inspect bounded request metadata and retained-event minute counts", usage:"bb pool observations [--json]" },
+      { name:"history", summary:"Inspect bounded fourteen-day hourly account and client counters", usage:"bb pool history [--offset <0..8192>] [--limit <1..200>] [--json]" },
+      {
+        name: "status",
+        summary: "Show hub, machine token, routing, and account status",
+        usage: "bb pool status [--json]",
+      },
+      {
+        name: "routing",
+        summary: "Enable or disable pooled routing for one provider",
+        usage: "bb pool routing <claude|codex|kimi|zai|opencode-go|neuraldeep|agy|cursor|devin|grok> [--off]",
+      },
+      {
+        name: "config",
+        summary: "Show Account Pooler routing configuration",
+        usage: "bb pool config",
+      },
+      {
+        name: "config-set",
+        summary: "Update one Account Pooler routing configuration value",
+        usage:
+          "bb pool config set <anthropicUpstreamBaseUrl|codexUpstreamBaseUrl|kimiUpstreamBaseUrl|zaiUpstreamBaseUrl|opencodeGoUpstreamBaseUrl|opencodeFreeUpstreamBaseUrl|neuraldeepUpstreamBaseUrl|cursorUpstreamBaseUrl|devinUpstreamBaseUrl|grokUpstreamBaseUrl|maxConcurrentRequestsPerAccount|claudeRequestStartIntervalMs|switchThreshold|routingStrategy|reserveDrainHours|restDays|vpnOnlyProviders|vpnStatusFile|browserHostId|vpnGuardEnabled> <value>",
+      },
+      {
+        name: "token-rotate",
+        summary: "Rotate one machine's Account Pooler bearer token",
+        usage: "bb pool token rotate --machine <id-or-name>",
+      },
+      {
+        name: "bypass",
+        summary: "Bypass Account Pooler routing for one thread",
+        usage: "bb pool bypass <thread-id> [--off]",
+      },
+      {
+        name: "browser-open",
+        summary:
+          "Open a persistent per-account browser profile with the exit IP timezone",
+        usage: "bb pool browser open <id|email|label> [--url <url>]",
+      },
+      {
+        name: "browser-list",
+        summary: "List pool accounts and the state of their browser profiles",
+        usage: "bb pool browser list [--json]",
+      },
+    ],
+    async run(argv, ctx): Promise<PluginCliResult> {
+      try {
+        if(argv[0]==='maintenance'){
+          if(!maintenance)throw Error('Model maintenance unavailable');
+          let result:object;
+          if(argv[1]==='status'&&argv.length===3&&argv[2]==='--json')result=maintenance.status();
+          else if(['acquire','release','interrupt'].includes(argv[1]!)&&argv.length===5&&argv[2]==='--owner'&&argv[4]==='--json'){
+            const owner=z.uuid().parse(argv[3]);
+            result=await maintenance[argv[1] as 'acquire'|'release'|'interrupt'](owner);
+          }else throw Error(HELP);
+          return {exitCode:0,stdout:json(result)};
+        }
+        if(argv[0]==='egress'){
+          if(!egress)throw Error('Egress management unavailable.');
+          if(argv[1]==='status'&&argv.length===3&&argv[2]==='--json')return {exitCode:0,stdout:JSON.stringify(egress.snapshot(),null,2)+'\n'};
+          if(argv[1]==='configure'&&argv.length===3)await egress.configure(JSON.parse(argv[2]!));
+          else if(argv[1]==='bind'&&argv.length===5)await egress.bind(argv[2]!,{id:argv[3]!,version:Number(argv[4])});
+          else if(argv[1]==='unbind'&&argv.length===3)await egress.bind(argv[2]!,null);
+          else throw Error('Invalid egress operation.');
+          return {exitCode:0,stdout:'Account egress configured for new sessions; existing sessions stay pinned.\n'};
+        }
+        if(argv[0]==='native'){
+          if(!nativeSessions)throw Error('Native executor management unavailable.');
+          let result:object;
+          if(argv[1]==='status'&&argv.length===3&&argv[2]==='--json')result=await nativeSessions.snapshot();
+          else if(argv[1]==='configure'&&argv.length===3)result=await nativeSessions.configure(JSON.parse(argv[2]!));
+          else if(argv[1]==='prefer'&&argv.length===3){await nativeSessions.prefer(argv[2]!, (await nativeSessions.accounts()).selectionRevision);result={executorId:argv[2]!};}
+          else if(argv[1]==='mode'&&argv.length===3&&['managed','off'].includes(argv[2]!))result=await nativeSessions.setManaged(argv[2]==='managed');
+          else if(argv[1]==='attest-stopped'&&argv.length===4&&argv[3]==='--confirmed')result=await nativeSessions.attestStopped(argv[2]!);
+          else throw Error(HELP);
+          return {exitCode:0,stdout:json(result)};
+        }
+        if (argv.includes("--help") || argv.includes("-h")) {
+          return { exitCode: 0, stdout: `${HELP}\n` };
+        }
+        if (argv[0] === "account" && argv[1] === "priority") {
+          if (argv.length !== 4 || argv[3]?.trim() === "")
+            throw new Error(HELP);
+          const input = accountPriorityInputSchema.parse({
+            accountId: argv[2],
+            priority: Number(argv[3]),
+          });
+          const account = await operations.setPriority(
+            input.accountId,
+            input.priority,
+          );
+          if (account === null) throw new Error("Account not found.");
+          return {
+            exitCode: 0,
+            stdout: `Set ${account.label} priority to ${account.priority}.\n`,
+          };
+        }
+        if (argv[0] === "account" && argv[1] === "projects") {
+          if (argv.length !== 4) throw new Error(HELP);
+          const { id } = accountIdInputSchema.parse({ id: argv[2] });
+          const projects = accountProjectsSchema.parse(argv[3] === "off" ? { onlySelected: false, rules: [] } : JSON.parse(argv[3]!));
+          const account = await operations.setProjects(id, projects);
+          if (account === null) throw new Error("Account not found.");
+          return { exitCode: 0, stdout: "Account project routing updated.\n" };
+        }
+        if (argv[0] === "account" && argv[1] === "role") {
+          if (argv.length !== 4) throw new Error(HELP);
+          const input = accountRoleInputSchema.parse({
+            accountId: argv[2],
+            role: argv[3],
+          });
+          const account = await operations.setRole(input.accountId, input.role);
+          if (account === null) throw new Error("Account not found.");
+          return {
+            exitCode: 0,
+            stdout: `Set ${account.label} role to ${account.role}.\n`,
+          };
+        }
+        if (argv[0] === "account" && argv[1] === "cap") {
+          const off = argv.length === 4 && argv[3] === "off";
+          if (
+            !off &&
+            (argv.length !== 5 ||
+              argv[3]?.trim() === "" ||
+              argv[4]?.trim() === "")
+          )
+            throw new Error(HELP);
+          const input = accountCapInputSchema.parse({
+            accountId: argv[2],
+            cap: off ? null : { early: Number(argv[3]), late: Number(argv[4]) },
+          });
+          const account = await operations.setCap(input.accountId, input.cap);
+          if (account === null) throw new Error("Account not found.");
+          return {
+            exitCode: 0,
+            stdout: `Set ${account.label} cap to ${formatCap(account.cap)}.\n`,
+          };
+        }
+        if (argv[0] === "account" && argv[1] === "reorder") {
+          const input = accountReorderInputSchema.parse({
+            provider: argv[2],
+            accountIds: argv.slice(3),
+          });
+          await operations.reorder(input.provider, input.accountIds);
+          return {
+            exitCode: 0,
+            stdout: `Updated ${input.provider} account order.\n`,
+          };
+        }
+        if (argv[0] === "account" && argv[1] === "refresh") {
+          if (argv.length !== 3) throw new Error(HELP);
+          const { id } = accountIdInputSchema.parse({ id: argv[2] });
+          if ((await operations.refreshUsage(id)) === null)
+            throw new Error("Account not found.");
+          return { exitCode: 0, stdout: `Refreshed usage for ${id}.\n` };
+        }
+        if (argv[0] === "account" && argv[1] === "add") {
+          const flags = parseFlags(
+            argv.slice(2),
+            ["import", "api-key-stdin", "login"],
+            ["provider", "api-key", "label", "priority"],
+          );
+          const imported = flags.booleans.has("import");
+          const apiKeyStdin = flags.booleans.has("api-key-stdin");
+          const loginRequested = flags.booleans.has("login");
+          const apiKey = flags.values.get("api-key");
+          const sourceCount =
+            Number(imported) +
+            Number(apiKeyStdin) +
+            Number(loginRequested) +
+            Number(apiKey !== undefined);
+          if (sourceCount !== 1)
+            throw new Error(
+              "Choose exactly one of --login, --import, --api-key-stdin, or --api-key <key>.",
+            );
+          if (flags.values.get("provider") === "agy") {
+            throw new Error("Use Antigravity login in the Pooler UI; local login/import and API keys are not supported.");
+          }
+          if (loginRequested) {
+            const provider = flags.values.get("provider");
+            if (provider !== "claude" && provider !== "codex" && provider !== "grok") {
+              throw new Error(
+                "--login requires --provider claude, codex, or grok.",
+              );
+            }
+            if (flags.values.has("label") || flags.values.has("priority")) {
+              throw new Error("--login does not accept --label or --priority.");
+            }
+            if (provider === "grok") {
+              if (grokLogin === undefined) throw new Error("Grok sign-in is unavailable. Reload the Account Pool plugin and retry.");
+              const started = await grokLogin.start();
+              return {
+                exitCode: 0,
+                stdout: `${[
+                  "Open this URL to sign in to Grok:",
+                  started.verificationUri,
+                  "",
+                  `Enter this code: ${started.userCode}`,
+                  `Session ID: ${started.sessionId}`,
+                  "",
+                  "After authorizing, wait for the account to be added with:",
+                  `bb pool account login-poll --session ${started.sessionId} --provider grok`,
+                ].join("\n")}\n`,
+              };
+            }
+            if (provider === "codex") {
+              const started = await codexLogin.start();
+              return {
+                exitCode: 0,
+                stdout: `${[
+                  "Open this URL to sign in to Codex:",
+                  started.verificationUri,
+                  "",
+                  `Enter this code: ${started.userCode}`,
+                  `Session ID: ${started.sessionId}`,
+                  "",
+                  "After authorizing, wait for the account to be added with:",
+                  `bb pool account login-poll --session ${started.sessionId}`,
+                ].join("\n")}\n`,
+              };
+            }
+            const started = await login.start();
+            return {
+              exitCode: 0,
+              stdout: `${[
+                "Open this URL to sign in to Claude:",
+                started.authorizeUrl,
+                "",
+                `Session ID: ${started.sessionId}`,
+                "",
+                "After signing in, pipe the code shown on the final page into:",
+                `printf '%s\\n' \"$CLAUDE_AUTH_CODE\" | bb pool account login-complete --session ${started.sessionId} --code-stdin`,
+              ].join("\n")}\n`,
+            };
+          }
+          if (apiKeyStdin) {
+            throw new Error(
+              "--api-key-stdin must be invoked through the bb CLI so it can read stdin safely.",
+            );
+          }
+          if (
+            !imported &&
+            flags.values.get("provider") === "codex"
+          ) {
+            throw new Error("Codex accounts can only be added with --import.");
+          }
+          const priorityText = flags.values.get("priority") ?? "100";
+          const input = accountAddInputSchema.parse({
+            provider: flags.values.get("provider"),
+            source: imported ? { kind: "import" } : { kind: "api-key", apiKey },
+            label: flags.values.get("label") ?? null,
+            priority: Number(priorityText),
+          });
+          const account = await operations.add(input);
+          return {
+            exitCode: 0,
+            stdout: `Added ${account.label} (${account.id}).\n`,
+          };
+        }
+        if (argv[0] === "account" && argv[1] === "login-poll") {
+          const flags = parseFlags(argv.slice(2), [], ["session", "provider"]);
+          const provider = flags.values.get("provider") ?? "codex";
+          if (provider !== "codex" && provider !== "grok") {
+            throw new Error("--provider must be codex or grok.");
+          }
+          const input = codexLoginPollInputSchema.parse({
+            sessionId: flags.values.get("session"),
+          });
+          const poller = provider === "grok" ? grokLogin : codexLogin;
+          if (poller === undefined) throw new Error("Grok sign-in is unavailable. Reload the Account Pool plugin and retry.");
+          const signal = ctx.signal;
+          const cancel = () => poller.cancel(input);
+          signal?.addEventListener("abort", cancel, { once: true });
+          try {
+            if (signal?.aborted) {
+              cancel();
+              throw signal.reason ?? new Error(`${provider === "grok" ? "Grok" : "Codex"} login was cancelled.`);
+            }
+            while (true) {
+              const delayMs = provider === "grok"
+                ? grokLogin!.nextPollDelayMs()
+                : codexLogin.nextPollDelayMs(input.sessionId);
+              await wait(delayMs, undefined, { signal });
+              const result = await poller.poll(input);
+              if (signal?.aborted) {
+                throw signal.reason ?? new Error(`${provider === "grok" ? "Grok" : "Codex"} login was cancelled.`);
+              }
+              if (result.status === "complete") {
+                return {
+                  exitCode: 0,
+                  stdout: `Added ${result.account.label} (${result.account.id}).\n`,
+                };
+              }
+              if (result.status === "error") {
+                throw new Error(result.message);
+              }
+            }
+          } catch (error) {
+            if (signal?.aborted) poller.cancel(input);
+            throw error;
+          } finally {
+            signal?.removeEventListener("abort", cancel);
+          }
+        }
+        if (argv[0] === "account" && argv[1] === "login-complete") {
+          const flags = parseFlags(
+            argv.slice(2),
+            ["code-stdin"],
+            ["session", "code"],
+          );
+          if (flags.booleans.has("code-stdin")) {
+            throw new Error(
+              "--code-stdin requires the current bb CLI so it can read stdin safely.",
+            );
+          }
+          const input = loginCompleteInputSchema.parse({
+            sessionId: flags.values.get("session"),
+            pasted: flags.values.get("code"),
+          });
+          const account = await login.complete(input);
+          return {
+            exitCode: 0,
+            stdout: `Added ${account.label} (${account.id}).\n`,
+          };
+        }
+        if (argv[0] === "account" && argv[1] === "list") {
+          const flags = parseFlags(argv.slice(2), ["json"], []);
+          const accounts = await operations.list();
+          return {
+            exitCode: 0,
+            stdout: flags.booleans.has("json")
+              ? json({ accounts })
+              : `${formatAccounts(accounts)}\n`,
+          };
+        }
+        if (argv[0] === "browser" && argv[1] === "list") {
+          const flags = parseFlags(argv.slice(2), ["json"], []);
+          if(config.get().browserHostId && !browser)throw Error('Remote browser host transport is unavailable.');
+          const profiles = browser ? await browser.list() : await listBrowserProfiles({
+            accounts: await operations.list(),
+            dataDir: bb.server.experimental_dataDir,
+            pluginId: bb.pluginId,
+          });
+          if (flags.booleans.has("json")) {
+            return { exitCode: 0, stdout: json({ profiles }) };
+          }
+          const lines = profiles.map(
+            (row) =>
+              `${row.provider}\t${row.email ?? (row.profileName === "" ? row.label : row.profileName)}\t` +
+              (row.exists
+                ? `${row.profileDirectory} (updated ${new Date(row.updatedAt ?? 0).toISOString()})`
+                : "no profile yet"),
+          );
+          return { exitCode: 0, stdout: `${lines.join("\n")}\n` };
+        }
+        if (argv[0] === "browser" && argv[1] === "open") {
+          const query = argv[2];
+          if (query === undefined || query.startsWith("--")) throw new Error(HELP);
+          const flags = parseFlags(argv.slice(3), [], ["url"]);
+          if(config.get().browserHostId){
+            if(!browser)throw Error('Remote browser host transport is unavailable.');
+            await browser.open(query,flags.values.get("url"));
+            return {exitCode:0,stdout:'Opened account browser on the selected Mac.\n'};
+          }
+          const result = await openAccountBrowser({
+            accounts: await operations.list(),
+            query,
+            url: flags.values.get("url"),
+            dataDir: bb.server.experimental_dataDir,
+            pluginId: bb.pluginId,
+            vpnStatusFile: config.get().vpnStatusFile,
+          });
+          return {
+            exitCode: 0,
+            stdout:
+              `Opened "${result.profileName}" in Helium.\n` +
+              `  profile: ${result.profileDirectory}\n` +
+              `  timezone: ${result.timezone ?? "system"}\n` +
+              (result.url === "about:blank"
+                ? "  startup: saved profile settings\n"
+                : `  site: ${new URL(result.url).origin}\n`),
+          };
+        }
+        if (
+          argv[0] === "account" &&
+          ["remove", "enable", "disable"].includes(argv[1] ?? "")
+        ) {
+          if (argv.length !== 3) throw new Error(HELP);
+          const { id } = accountIdInputSchema.parse({ id: argv[2] });
+          if (argv[1] === "remove") {
+            const removed = await operations.remove(id);
+            if (!removed) throw new Error(`Account ${id} does not exist.`);
+            return { exitCode: 0, stdout: `Removed ${id}.\n` };
+          }
+          const account =
+            argv[1] === "enable"
+              ? await operations.enable(id)
+              : await operations.disable(id);
+          if (account === null)
+            throw new Error(`Account ${id} does not exist.`);
+          return {
+            exitCode: 0,
+            stdout: `${argv[1] === "enable" ? "Enabled" : "Disabled"} ${id}.\n`,
+          };
+        }
+        if (argv[0] === "readiness") {
+          const flags = parseFlags(argv.slice(1), ["json"], ["project"]);
+          const projectId = providerReadinessSchema.shape.projectId.parse(flags.values.get("project") ?? null);
+          const entries = await operations.readiness(projectId);
+          return {exitCode:0, stdout:flags.booleans.has("json") ? json(entries) : entries.map(entry => `${entry.provider}: ${entry.ready ? "ready" : entry.reason}`).join("\n")+"\n"};
+        }
+        if(argv[0]==='stream-probe'){
+          const flags=parseFlags(argv.slice(1),['json','confirm'],['thread','interrupt-request']);
+          const threadId=flags.values.get('thread')??'',requestId=flags.values.get('interrupt-request');
+          if(!/^thr_[a-z0-9]+$/.test(threadId))throw Error('--thread requires a BB thread ID');
+          if(requestId!==undefined&&!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(requestId))throw Error('--interrupt-request requires an exact request UUID');
+          if((requestId!==undefined)!==flags.booleans.has('confirm'))throw Error('Interrupting one stream requires both --interrupt-request and --confirm');
+          if(!streamProbe)throw Error('Cursor stream probe unavailable');
+          return {exitCode:0,stdout:json(streamProbe(threadId,requestId))};
+        }
+        if(argv[0]==='guard-probe'){
+          const flags=parseFlags(argv.slice(1),['json'],['provider','delay-stage','delay-ms','delay-attempts']);
+          if(!guardProbe)throw Error('Guard probe unavailable');
+          const rawDelay=flags.values.get('delay-ms');
+          if(rawDelay!==undefined&&!/^\d+$/.test(rawDelay))throw Error('--delay-ms requires an integer 0..4500');
+          const input=guardProbeSchema.parse({provider:flags.values.get('provider'),delayStage:flags.values.get('delay-stage'),
+            delayMs:rawDelay===undefined?undefined:Number(rawDelay),delayAttempts:flags.values.get('delay-attempts')});
+          return {exitCode:0,stdout:json(await guardProbe(input))};
+        }
+        if (argv[0] === "observations") {
+          parseFlags(argv.slice(1), ['json'], []);
+          return {exitCode:0,stdout:json(operations.observations())};
+        }
+        if (argv[0] === "history") {
+          const flags = parseFlags(argv.slice(1), ['json'], ['offset','limit']);
+          const integer = (name: string, fallback: number, min: number, max: number) => {
+            const raw = flags.values.get(name);
+            if (raw === undefined) return fallback;
+            if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw)<min || Number(raw)>max)
+              throw Error(`--${name} requires an integer ${min}..${max}.`);
+            return Number(raw);
+          };
+          return {exitCode:0,stdout:json(await operations.trafficHistory(integer('offset',0,0,8192),integer('limit',100,1,200)))};
+        }
+        if (argv[0] === "status") {
+          const flags = parseFlags(argv.slice(1), ["json"], []);
+          const [poolStatus, routedThreadsWithoutLocalLogin] =
+            await Promise.all([
+              operations.status(),
+              operations.routedThreadsWithoutLocalLogin(),
+            ]);
+          const status: PoolStatusReport = {
+            ...poolStatus,
+            routedThreadsWithoutLocalLogin,
+          };
+          return {
+            exitCode: 0,
+            stdout: flags.booleans.has("json")
+              ? json(status)
+              : `${formatStatus(status)}\n`,
+          };
+        }
+        if (argv[0] === "routing") {
+          const flags = parseFlags(argv.slice(2), ["off"], []);
+          const input = routingSetInputSchema.parse({
+            provider: argv[1],
+            enabled: !flags.booleans.has("off"),
+          });
+          await operations.setRouting(input.provider, input.enabled);
+          return {
+            exitCode: 0,
+            stdout: `${input.enabled ? "Enabled" : "Disabled"} ${input.provider} Account Pooler routing.\n`,
+          };
+        }
+        if (argv[0] === "config" && argv.length === 1) {
+          return { exitCode: 0, stdout: `${formatConfig(config.get())}\n` };
+        }
+        if (argv[0] === "config" && argv[1] === "set") {
+          if (argv.length !== 4) throw new Error(HELP);
+          const next = await config.set(parseConfigUpdate(argv[2], argv[3]));
+          return { exitCode: 0, stdout: `${formatConfig(next)}\n` };
+        }
+        if (argv[0] === "token" && argv[1] === "rotate") {
+          const flags = parseFlags(argv.slice(2), [], ["machine"]);
+          const { machine } = tokenRotateInputSchema.parse({
+            machine: flags.values.get("machine"),
+          });
+          const token = await operations.rotateToken(machine);
+          return {
+            exitCode: 0,
+            stdout: `Rotated the Account Pooler token for ${token.hostName ?? token.hostId}.\n`,
+          };
+        }
+        if (argv[0] === "client" && externalClients) {
+          if (argv[1] === "add" && argv[2]) {
+            const flags = parseFlags(argv.slice(3), [], ["output", "project", "purpose"]);
+            const output = flags.values.get("output");
+            if (!output) throw new Error("--output is required (path on the BB server).");
+            const projectId = flags.values.get("project") ?? null;
+            const purpose = flags.values.get("purpose");
+            if (purpose !== undefined && purpose !== "autopilot") throw Error("Unsupported client purpose.");
+            await externalClients.add(argv[2], output, projectId, purpose);
+            return { exitCode: 0, stdout: "External client token saved to private file on the BB server.\n" };
+          }
+          if (argv[1] === "revoke" && argv.length === 3) {
+            await externalClients.revoke(argv[2]!);
+            return { exitCode: 0, stdout: "External client revoked.\n" };
+          }
+          throw new Error(HELP);
+        }
+        if (argv[0] === "bypass") {
+          const threadId = argv[1];
+          if (threadId === undefined) throw new Error(HELP);
+          const flags = parseFlags(argv.slice(2), ["off"], []);
+          const input = bypassInputSchema.parse({
+            threadId,
+            bypassed: !flags.booleans.has("off"),
+          });
+          const result = await operations.setBypass(
+            input.threadId,
+            input.bypassed,
+          );
+          return {
+            exitCode: 0,
+            stdout: `${result.bypassed ? "Enabled" : "Disabled"} Account Pooler bypass for ${result.threadId}.\n`,
+          };
+        }
+        throw new Error(HELP);
+      } catch (error) {
+        return {
+          exitCode: 1,
+          stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+        };
+      }
+    },
+  });
+}

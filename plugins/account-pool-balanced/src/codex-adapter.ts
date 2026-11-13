@@ -1,0 +1,492 @@
+import { codexBudgetQuota } from "./codex-budget.js";
+import { poolErrorResponse } from "./pool-errors.js";
+import { z } from "zod";
+import { parseCodexRequestBody } from "./request-body.js";
+import {
+  EMPTY_FAMILY_WEEKLY,
+  type AccountQuota,
+  type AccountSecret,
+  type LimitWindow,
+  type LimitWindowSlot,
+} from "./contracts.js";
+import {
+  codexAccessTokenExpiresAt,
+  importCodexCredentials,
+  type ImportedCodexCredentials,
+} from "./credentials.js";
+import type { ProviderAdapter } from "./provider-adapter.js";
+import {
+  fetchOAuthRefresh,
+  filterRequestHeaders,
+  mountedUpstreamUrl,
+  oauthSecretDueForRefresh,
+} from "./provider-adapter.js";
+import { epochMilliseconds } from "./quota.js";
+
+export const CODEX_AUTH_BASE_URL = "https://auth.openai.com";
+export const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+export const DEFAULT_CODEX_REFRESH_URL = `${CODEX_AUTH_BASE_URL}/oauth/token`;
+export const DEFAULT_CODEX_USAGE_URL =
+  "https://chatgpt.com/backend-api/wham/usage";
+const USAGE_REQUEST_TIMEOUT_MS = 15_000;
+const RESET_DETAILS_TIMEOUT_MS = 3_000;
+const ALLOWED_REQUEST_HEADERS = new Set([
+  "accept",
+  "content-encoding",
+  "content-type",
+  "openai-beta",
+  "originator",
+  "session-id",
+  "session_id",
+  "thread-id",
+  "user-agent",
+  "x-openai-internal-codex-responses-lite",
+]);
+const ALLOWED_REQUEST_HEADER_PREFIXES = ["x-codex-", "x-stainless-"];
+
+const refreshResponseSchema = z
+  .object({
+    access_token: z.string().min(1),
+    refresh_token: z.string().min(1).optional(),
+    id_token: z.string().min(1).optional(),
+  })
+  .passthrough();
+
+function numberHeader(headers: Headers, name: string): number | null {
+  const value = headers.get(name);
+  if (value === null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function resetAt(headers: Headers, prefix: string, now: number): number | null {
+  const raw = numberHeader(headers, `${prefix}-reset-at`);
+  if (raw !== null && raw > 0) return epochMilliseconds(raw);
+  const after = numberHeader(headers, `${prefix}-reset-after-seconds`);
+  return after === null ? null : now + Math.round(after * 1_000);
+}
+
+function windowMinutesFromSeconds(
+  seconds: number | null | undefined,
+): number | null {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || !Number.isInteger(seconds) || seconds % 60 !== 0)
+    return null;
+  const minutes = Math.round(seconds / 60);
+  return minutes > 0 ? minutes : null;
+}
+
+function previousWindow(
+  previous: AccountQuota,
+  slot: LimitWindowSlot,
+): LimitWindow | null {
+  return previous.limitWindows.find((window) => window.slot === slot) ?? null;
+}
+
+function windowFromHeaders(
+  headers: Headers,
+  slot: LimitWindowSlot,
+  previous: LimitWindow | null,
+  now: number,
+): LimitWindow | null {
+  const prefix = `x-codex-${slot}`;
+  const usedPercent = numberHeader(headers, `${prefix}-used-percent`);
+  const reset = resetAt(headers, prefix, now);
+  const minutes = numberHeader(headers, `${prefix}-window-minutes`);
+  const overLimit =
+    headers.get(`${prefix}-over-limit`)?.toLowerCase() === "true";
+  if (usedPercent === null && reset === null && !overLimit) return previous;
+  const utilization =
+    usedPercent === null
+      ? (previous?.utilization ?? null)
+      : Math.max(0, Math.min(1, usedPercent / 100));
+  const windowMinutes =
+    minutes !== null && minutes > 0
+      ? Math.round(minutes)
+      : (previous?.windowMinutes ?? null);
+  const nextReset =
+    reset ??
+    (previous?.resetAt !== null &&
+    previous?.resetAt !== undefined &&
+    previous.resetAt > now
+      ? previous.resetAt
+      : null);
+  if (
+    windowMinutes === null &&
+    nextReset === null &&
+    !overLimit &&
+    (utilization === null || utilization === 0)
+  )
+    return null;
+  return {
+    slot,
+    windowMinutes,
+    utilization,
+    resetAt: nextReset,
+    status:
+      overLimit || (utilization !== null && utilization >= 1)
+        ? "rejected"
+        : null,
+    observedAt: now,
+    source: "header",
+  };
+}
+
+function orderedWindows(
+  windows: ReadonlyArray<LimitWindow | null>,
+): LimitWindow[] {
+  return windows.filter((window): window is LimitWindow => window !== null);
+}
+
+function withoutClaudeSlots(previous: AccountQuota): AccountQuota {
+  return {
+    ...previous,
+    fiveHourUtilization: null,
+    fiveHourResetAt: null,
+    fiveHourStatus: null,
+    sevenDayUtilization: null,
+    sevenDayResetAt: null,
+    sevenDayStatus: null,
+    representativeClaim: null,
+    familyWeekly: EMPTY_FAMILY_WEEKLY,
+  };
+}
+
+// Routing keeps its legacy normalization; budget evidence must reject lossy inputs.
+function invalidBudgetHeaders(headers: Headers): boolean {
+  return (["primary", "secondary"] as const).some(slot => {
+    const prefix = `x-codex-${slot}`;
+    const overLimit = headers.get(`${prefix}-over-limit`);
+    if (overLimit !== null && !/^(true|false)$/iu.test(overLimit)) return true;
+    return ["used-percent", "window-minutes", "reset-at", "reset-after-seconds"].some(field => {
+      const raw = headers.get(`${prefix}-${field}`);
+      if (raw === null) return false;
+      const value = Number(raw);
+      if (!raw.trim() || !Number.isFinite(value)) return true;
+      if (field === "used-percent") return value < 0 || value > 100;
+      if (field === "window-minutes") return value <= 0 || !Number.isInteger(value);
+      return value < 0;
+    });
+  });
+}
+
+function codexQuotaFromHeaders(
+  accountId: string,
+  headers: Headers,
+  previous: AccountQuota,
+  now: number,
+): AccountQuota {
+  // A natural response represents an absent slot with this exact zero/empty
+  // sentinel. It is neutral only when authoritative usage already proves that
+  // absence; neither the sentinel nor this merge creates or renews proof.
+  if (previous.codexUsageEvidence && codexBudgetQuota(previous, now).budgetReady) {
+    for (const slot of ["primary", "secondary"] as const) {
+      const prefix = `x-codex-${slot}`;
+      if (previous.codexUsageEvidence[slot] === "absent" && previousWindow(previous, slot) === null &&
+          headers.get(`${prefix}-used-percent`) === "0" &&
+          headers.get(`${prefix}-window-minutes`) === "0" &&
+          headers.get(`${prefix}-reset-at`) === "" &&
+          headers.get(`${prefix}-reset-after-seconds`) === "0" &&
+          headers.get(`${prefix}-over-limit`) === null) {
+        headers = new Headers(headers);
+        for (const field of ["used-percent", "window-minutes", "reset-at", "reset-after-seconds"])
+          headers.delete(`${prefix}-${field}`);
+      }
+    }
+  }
+  const contradiction = (["primary", "secondary"] as const).some(slot => {
+    const raw = headers.get(`x-codex-${slot}-window-minutes`);
+    return raw !== null && Number(raw) !== previousWindow(previous, slot)?.windowMinutes;
+  });
+  const refused = (["primary", "secondary"] as const).some(slot =>
+    headers.get(`x-codex-${slot}-over-limit`)?.toLowerCase() === "true");
+  if (previous.codexUsageEvidence && (invalidBudgetHeaders(headers) || contradiction || refused))
+    previous = { ...previous, codexUsageEvidence: undefined };
+  const priorPrimary = previousWindow(previous, "primary");
+  const priorSecondary = previousWindow(previous, "secondary");
+  // Headers never create absence. A neutral unknown-duration slot must not erase
+  // an existing complete, fresh and unexpired usage proof of that same absence.
+  const completeUsage = previous.codexUsageEvidence !== undefined && codexBudgetQuota(previous, now).budgetReady;
+  const mergeSlot = (slot: LimitWindowSlot, prior: LimitWindow | null) => {
+    const window = windowFromHeaders(headers, slot, prior, now);
+    const provenAbsent = completeUsage && previous.codexUsageEvidence?.[slot] === "absent" && prior === null;
+    const neutral = window !== null && window.windowMinutes === null &&
+      (window.utilization === null || window.utilization === 0) && window.status !== "rejected" &&
+      (window.resetAt === null || window.resetAt <= now);
+    return provenAbsent && headers.get(`x-codex-${slot}-window-minutes`) === null && neutral ? null : window;
+  };
+  const primary = mergeSlot("primary", priorPrimary);
+  const secondary = mergeSlot("secondary", priorSecondary);
+  if (primary === priorPrimary && secondary === priorSecondary) return previous;
+  // A changed slot layout contradicts the older complete usage response.
+  // Partial headers must not reuse that response to assert a missing duration.
+  const layoutUnchanged = [primary, secondary].every((window, index) => {
+    const prior = index === 0 ? priorPrimary : priorSecondary;
+    return window === null ? prior === null : prior !== null && window.windowMinutes === prior.windowMinutes;
+  });
+  return {
+    ...withoutClaudeSlots(previous),
+    accountId,
+    limitWindows: orderedWindows([primary, secondary]),
+    codexUsageEvidence: layoutUnchanged ? previous.codexUsageEvidence : undefined,
+    observedAt: now,
+    heldUntil: previous.heldUntil,
+  };
+}
+
+const usageWindowSchema = z
+  .object({
+    used_percent: z.number().min(0).max(100),
+    reset_at: z.number().nullish(),
+    reset_after_seconds: z.number().nullish(),
+    limit_window_seconds: z.number().nullish(),
+  })
+  .passthrough();
+
+const usageResponseSchema = z
+  .object({
+    rate_limit: z
+      .object({
+        allowed: z.boolean().nullish(),
+        limit_reached: z.boolean().nullish(),
+        primary_window: usageWindowSchema.nullish(),
+        secondary_window: usageWindowSchema.nullish(),
+      })
+      .passthrough()
+      .nullish(),
+  })
+  .passthrough();
+
+const resetCountSchema = z.object({
+  rate_limit_reset_credits: z.object({
+    available_count: z.number().int().nonnegative(),
+  }).passthrough().nullish(),
+}).passthrough();
+
+const resetCreditsResponseSchema = z.object({
+  credits: z.array(z.object({
+    status: z.string(),
+    expires_at: z.string().nullish(),
+    title: z.string().nullish(),
+  }).passthrough()),
+}).passthrough();
+
+export function codexResetCreditDetails(payload: unknown): Array<{ expiresAt: number | null; title: string | null }> | null {
+  const parsed = resetCreditsResponseSchema.safeParse(payload);
+  if (!parsed.success) return null;
+  return parsed.data.credits.filter((credit) => credit.status === "available").map((credit) => {
+    const expiresAt = credit.expires_at == null ? NaN : Date.parse(credit.expires_at);
+    return { expiresAt: Number.isNaN(expiresAt) ? null : expiresAt, title: credit.title ?? null };
+  });
+}
+
+function windowFromUsage(
+  slot: LimitWindowSlot,
+  value: z.infer<typeof usageWindowSchema> | null | undefined,
+  now: number,
+): LimitWindow | null {
+  if (value === null || value === undefined) return null;
+  const utilization = Math.max(0, Math.min(1, value.used_percent / 100));
+  const reset =
+    value.reset_at !== null &&
+    value.reset_at !== undefined &&
+    Number.isFinite(value.reset_at)
+      ? epochMilliseconds(value.reset_at)
+      : value.reset_after_seconds !== null &&
+          value.reset_after_seconds !== undefined &&
+          Number.isFinite(value.reset_after_seconds)
+        ? now + Math.round(value.reset_after_seconds * 1_000)
+        : null;
+  return {
+    slot,
+    windowMinutes: windowMinutesFromSeconds(value.limit_window_seconds),
+    utilization,
+    resetAt: reset,
+    status: utilization >= 1 ? "rejected" : "allowed",
+    observedAt: now,
+    source: "usage",
+  };
+}
+
+export function codexQuotaFromUsage(
+  accountId: string,
+  payload: unknown,
+  previous: AccountQuota,
+  now: number,
+): AccountQuota | null {
+  const parsed = usageResponseSchema.safeParse(payload);
+  if (!parsed.success || parsed.data.rate_limit == null) return null;
+  return {
+    ...withoutClaudeSlots(previous),
+    accountId,
+    limitWindows: orderedWindows([
+      windowFromUsage("primary", parsed.data.rate_limit.primary_window, now),
+      windowFromUsage(
+        "secondary",
+        parsed.data.rate_limit.secondary_window,
+        now,
+      ),
+    ]),
+    observedAt: now,
+    codexUsageEvidence: {
+      source: "usage", observedAt: now,
+      allowed: parsed.data.rate_limit.allowed ?? null,
+      limitReached: parsed.data.rate_limit.limit_reached ?? null,
+      primary: parsed.data.rate_limit.primary_window === null ? "absent" : parsed.data.rate_limit.primary_window === undefined ? "unknown" : "present",
+      secondary: parsed.data.rate_limit.secondary_window === null ? "absent" : parsed.data.rate_limit.secondary_window === undefined ? "unknown" : "present",
+    },
+  };
+}
+
+export function createCodexAdapter(options: {
+  refreshUrl: string;
+  usageUrl: string;
+  importCredentials?: () => Promise<ImportedCodexCredentials>;
+}): ProviderAdapter {
+  return {
+    provider: "codex",
+    refreshesUsageWhileBusy: true,
+    upstreamName: "ChatGPT",
+    async importAccount() {
+      const imported = await (
+        options.importCredentials ?? importCodexCredentials
+      )();
+      return {
+        label: imported.email ?? "Codex account",
+        email: imported.email,
+        codexAccountId: imported.accountId,
+        subscriptionType: null,
+        rateLimitTier: null,
+        secret: {
+          kind: "oauth",
+          accessToken: imported.accessToken,
+          refreshToken: imported.refreshToken,
+          expiresAt: imported.expiresAt,
+          ...(imported.idToken === null ? {} : { idToken: imported.idToken }),
+        },
+      };
+    },
+    parseRequest(body, headers) {
+      const parsed = parseCodexRequestBody(body, headers);
+      return {
+        model: parsed.model,
+        family: parsed.family,
+        affinityId: parsed.affinityId,
+        parentAffinityId: parsed.parentAffinityId,
+        forAccount: () => body,
+      };
+    },
+    upstreamUrl: (request, settings) =>
+      mountedUpstreamUrl(request, settings.codexUpstreamBaseUrl, "v1/"),
+    requestHeaders(inbound, account, secret) {
+      if (secret.kind !== "oauth" || account.codexAccountId === undefined) {
+        throw new Error(
+          "Codex accounts require OAuth credentials and a ChatGPT account id.",
+        );
+      }
+      const headers = filterRequestHeaders(
+        inbound,
+        ALLOWED_REQUEST_HEADERS,
+        ALLOWED_REQUEST_HEADER_PREFIXES,
+      );
+      headers.set("authorization", `Bearer ${secret.accessToken}`);
+      headers.set("chatgpt-account-id", account.codexAccountId);
+      return headers;
+    },
+    quotaFromHeaders(accountId, headers, previous, _family, now) {
+      return codexQuotaFromHeaders(accountId, headers, previous, now);
+    },
+    isQuotaRejection(headers) {
+      return ["primary", "secondary"].some((window) => {
+        const prefix = `x-codex-${window}`;
+        return (
+          (numberHeader(headers, `${prefix}-used-percent`) ?? 0) >= 100 ||
+          headers.get(`${prefix}-over-limit`)?.toLowerCase() === "true"
+        );
+      });
+    },
+    async refreshSecret(context) {
+      const secret = oauthSecretDueForRefresh(context);
+      if (secret === null) return { secret: context.secret, refreshed: false };
+      const parsed = refreshResponseSchema.parse(
+        JSON.parse(
+          await fetchOAuthRefresh(context, options.refreshUrl, {
+            client_id: CODEX_OAUTH_CLIENT_ID,
+            grant_type: "refresh_token",
+            refresh_token: secret.refreshToken,
+          }),
+        ),
+      );
+      const refreshed: AccountSecret = {
+        kind: "oauth",
+        accessToken: parsed.access_token,
+        refreshToken: parsed.refresh_token ?? secret.refreshToken,
+        ...(parsed.id_token === undefined && secret.idToken === undefined
+          ? {}
+          : { idToken: parsed.id_token ?? secret.idToken }),
+        expiresAt: codexAccessTokenExpiresAt(parsed.access_token),
+      };
+      await context.accounts.writeSecret(context.account.id, refreshed);
+      return { secret: refreshed, refreshed: true };
+    },
+    async refreshUsage(context) {
+      let secret = await context.freshSecret();
+      if (secret.kind !== "oauth" || context.account.codexAccountId === undefined)
+        throw new Error("Для обновления квот нужны OAuth и ChatGPT account ID.");
+      const requestUsage = (accessToken: string) => context.fetch(options.usageUrl, {
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          "chatgpt-account-id": context.account.codexAccountId!,
+          originator: "bb",
+          accept: "application/json",
+        },
+        signal: AbortSignal.timeout(USAGE_REQUEST_TIMEOUT_MS),
+      });
+      let response = await requestUsage(secret.accessToken);
+      if (response.status === 401) {
+        await response.body?.cancel();
+        secret = await context.freshSecret(secret.accessToken);
+        if (secret.kind !== "oauth") throw new Error("Требуется повторный вход в ChatGPT.");
+        response = await requestUsage(secret.accessToken);
+      }
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`Не удалось обновить квоты: HTTP ${response.status}.${response.status === 401 ? " Требуется повторный вход в ChatGPT." : ""}`);
+      }
+      const payload: unknown = await response.json().catch(() => null);
+      const quota = codexQuotaFromUsage(
+        context.account.id,
+        payload,
+        context.quotas.get(context.account.id),
+        context.now(),
+      );
+      if (quota === null) throw new Error("Сервер вернул некорректные данные квот.");
+      context.quotas.put({ ...quota, error: null });
+      const resetCount = resetCountSchema.safeParse(payload);
+      const availableCount = resetCount.success ? resetCount.data.rate_limit_reset_credits?.available_count : undefined;
+      if (availableCount !== undefined) {
+        let credits: ReturnType<typeof codexResetCreditDetails> = null;
+        if (availableCount > 0) {
+          const detailsUrl = new URL(options.usageUrl);
+          detailsUrl.pathname = detailsUrl.pathname.replace(/\/usage$/u, "/rate-limit-reset-credits");
+          const details = await context.fetch(detailsUrl, {
+            headers: {
+              authorization: `Bearer ${secret.accessToken}`,
+              "chatgpt-account-id": context.account.codexAccountId,
+              originator: "bb",
+              accept: "application/json",
+            },
+            signal: AbortSignal.timeout(RESET_DETAILS_TIMEOUT_MS),
+          }).catch(() => null);
+          if (details?.ok) credits = codexResetCreditDetails(await details.json().catch(() => null));
+          else await details?.body?.cancel();
+        } else credits = [];
+        context.quotas.putResetCredits(context.account.id, {
+          availableCount, credits, observedAt: context.now(),
+        });
+      } else context.quotas.clearResetCredits(context.account.id);
+    },
+    errorResponse(status, message, headers, request) {
+      return poolErrorResponse("codex", status, message, headers, request);
+    },
+  };
+}

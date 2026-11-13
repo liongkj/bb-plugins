@@ -1,0 +1,101 @@
+# VPN-only providers and recovery
+
+The **Only VPN** switch applies to every account of the selected provider. Claude, Codex, Cursor and Devin default to VPN-only. Kimi, Z.ai and OpenCode Go are independent of this switch. Use-until-exhaustion never bypasses the network gate.
+
+Before each outbound request the pool checks a local status file on the **pool server**. Model requests, token refresh, browser/device login, quota polling, account profiles, reset-credit details and standalone Devin cloud requests use the same gate. Missing, stale, corrupt, untrusted or disconnected status produces a local refusal with `x-bb-pool-error: VPN_REQUIRED` on model routes. No provider request is attempted and the account is not marked invalid. Cached account information remains visible. Manual quota refresh reports the refusal, including the BB usage panel's Account Pooler source.
+
+The response depends on the entry point and protocol:
+
+- **BB-hosted Pooler:** ordinary model responses use HTTP `503` with `Retry-After: 10`. Cursor streaming retains the Connect HTTP `200` envelope and carries the local `503` in `x-bb-pool-http-status`.
+- **Standalone HTTP server:** its initial VPN admission check returns HTTP `403` without `Retry-After`. If admission succeeds but a later check in the shared model hub refuses the request, the hub uses the response format described above. Standalone Devin cloud routes return HTTP `403` for VPN refusals.
+
+These are local network-policy refusals, not provider authentication failures. See [Pool errors and recovery](../../../docs/pool-errors.md) for the reason codes and retry behavior.
+
+## Status writer
+
+Default path: `~/.local/state/vpnks/vpn-state.json` in the server user's home. Configure another absolute path with `bb pool config set vpnStatusFile /path/to/vpn-state.json`; `default` restores the default. The operator-controlled writer must confirm the outbound VPN route and live tunnel. The pool performs no external VPN probes.
+
+The file must be a root-owned regular file, not a symlink, at most 4096 bytes, without group/world write permissions. Write it atomically every 10 seconds:
+
+```json
+{
+  "schema": "oxi-vpnks/vpn-state/2",
+  "updated_unix": 1800000000,
+  "state": "connected",
+  "reason": "ok",
+  "coverage": "ipv4",
+  "guard_version": "2.0.0",
+  "tunnel": {"iface": "utun244", "core_pid": 123},
+  "epoch_hash": "example-epoch",
+  "traffic_probe_epoch_hash": "example-epoch",
+  "traffic_probe_ok": true,
+  "traffic_probe_unix": 1800000000,
+  "last_probe_attempt": {"ts": 1800000000, "ok": true},
+  "traffic_probe_max_age": 390,
+  "file_ttl": 90
+}
+```
+
+Only `connected` with a timestamp between now and 90 seconds ago and a coherent successful probe no older than 390 seconds allows protected traffic. Verification is mandatory and the older evidence format is rejected. Future timestamps also deny traffic. Use `disconnected` otherwise. Extra writer metadata is permitted. Reads, including cleanup, have a one-second deadline; overlapping reads of the same file share one operation, and a stalled operation returns `unknown` without spawning more reads. A server without a configured writer will correctly refuse protected providers, including after suspend.
+
+## Configuration
+
+```sh
+bb pool config set vpnOnlyProviders codex,claude,cursor,devin
+bb pool status --json
+```
+
+The `vpn.state` and `vpn.blockedProviders` fields report the current local decision. A provider's switch in settings changes the same configuration. An explicit deployment opt-out is available with `bb pool config set vpnOnlyProviders none`. Standalone configurations accept the same `vpnOnlyProviders` and `vpnStatusFile` fields.
+
+This gate protects **the pool's traffic**. BB's built-in Codex/Claude usage sources and agents bypassing the pool are separate network clients. Their requests require their own admission checks or an enforced host firewall/VPN policy. A pool switch does not intercept another plugin's fetch or an agent's direct network activity. A heartbeat is not a packet-level firewall; keep the host VPN kill switch enabled to cover state-change races and already-running connections.
+
+## Recovery
+
+Network failures and OAuth HTTP 403 use bounded retry backoff rather than permanent credential rejection. HTML HTTP 403 edge-block pages pause an account for one minute and permit a later attempt. The periodic five-minute quota refresh can recheck legacy saved OAuth-403/HTML edge errors; a successful provider quota response clears them. Manual refresh can also recover them without toggling the account.
+
+OAuth HTTP 400/401 remains an authentication error. Quota exhaustion remains a provider limit. No automatic reset credits are consumed, and client requests are never resent after an uncertain successful outcome.
+
+## Upgrade and policy compatibility
+
+Upgrade Pooler 0.4.21 and Guard 0.1.6 together when linked. A mixed-version pair can locally refuse protected traffic during the update. Stored settings are sanitized without resetting provider choices, machine scope, accounts or automation bindings. The retired verification switch is not a writable API/CLI setting; `config.get` exposes immutable `vpnPolicyVersion: 2` for the Guard handshake. There is no cached legacy allow or ordinary-transport fallback for VPN-only providers.
+
+When Follow VPN Guard is enabled, only Kimi and Z.ai bypass Guard admission. Codex, Claude, Cursor, Devin and OpenCode Go ask Guard before provider calls, including maintenance. Go therefore requires Guard with Go network-decision support; an older Guard refuses locally. The linked protected transport uses IPv4, matching the proof coverage. VPN-only provider settings still govern independent VPN checks; a connected VPN does not itself mean the manual Guard block is off.
+
+A timed-out state-file result is discarded before the next read. At most 16 underlying file operations may remain outstanding; timeouts never free an underlying operation's capacity until that operation settles. This prevents unbounded resource growth while allowing a later healthy read after an isolated stall.
+
+
+A Guard permission read that times out after four seconds is retried once with
+fresh server-host binding and a new abort signal, before any provider request.
+The total permission-read budget is eight seconds. An explicit denial, invalid
+decision or RPC failure is never retried. A second timeout still denies traffic;
+no previous permission is cached and no provider operation is replayed.
+
+
+## Guard refusal diagnostics and rehearsal
+
+Pooler logs every failed permission attempt and recovery on the second attempt
+with `Account Pooler Guard permission`. Fields contain a check ID shared by
+both attempts, provider, validated server host ID, current stage, per-stage
+milliseconds, outcome and deadline overrun. The overrun is a timing symptom,
+not proof of an event-loop stall. Normal first-attempt successes are not logged.
+Raw RPC errors, prompts, headers and credentials are never included. Use
+`bb plugin logs account-pool-balanced` to read these persistent BB logs;
+retention follows the server log rotation, independently of request observations.
+
+`bb pool guard-probe --provider cursor --json` reads the real Guard through the
+same server-host binding and retry path, without an upstream model request.
+To inject a delay into this probe only:
+
+```sh
+bb pool guard-probe --provider cursor --delay-stage guard-rpc --delay-ms 4100 --json
+bb pool guard-probe --provider cursor --delay-stage guard-rpc --delay-ms 4100 --delay-attempts all --json
+```
+
+Stages are `server-host`, `guard-rpc` and `server-host-recheck`. Delay is bounded
+to 4500 ms and aborts with that attempt. The default delays only the first read;
+`all` delays both reads and should refuse with a timeout. A healthy second read
+may still refuse if real Guard policy denies it. These probe results include
+all attempts in their own response; injected delays are never installed in the
+live Guard policy or used by other clients. This rehearses admission, not model
+availability. An aborted host lookup cannot proceed to a later SDK call even if
+its underlying operation returns late.
