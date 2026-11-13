@@ -201,6 +201,30 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+describe("official Provider Retry availability integration", () => {
+  it("reports a routed Claude request ready and rejects stale request IDs", async () => {
+    const fixture = await createFixture({ upstreamUrl: "https://upstream.example" });
+    fixture.host.harness.sdk.stub("threads.get", async () => ({
+      id: "thread-one",
+      providerId: "claude-code",
+      projectId: "project-one",
+    }) as never);
+    fixture.host.harness.sdk.stub("threads.events.list", async () => ([{
+      type: "client/turn/requested",
+      threadId: "thread-one",
+      data: { requestId: "latest-request", execution: { model: "claude-sonnet" } },
+    }]) as never);
+    expect(await fixture.host.harness.behavior.callRpc(
+      "provider-retry.v1.availability",
+      { threadId: "thread-one", requestId: "latest-request" },
+    )).toEqual({ kind: "ready" });
+    expect(await fixture.host.harness.behavior.callRpc(
+      "provider-retry.v1.availability",
+      { threadId: "thread-one", requestId: "old-request" },
+    )).toEqual({ kind: "unavailable", reason: "source-unavailable" });
+  });
+});
+
 describe("account browser server wiring", () => {
   it("uses the selected account inventory, server paths and latest VPN setting", async () => {
     const launch = vi.spyOn(accountBrowser, "openAccountBrowser").mockRejectedValue(new Error("Synthetic launch stopped"));
