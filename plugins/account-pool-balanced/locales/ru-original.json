@@ -400,5 +400,10 @@
   "Add": "Добавить",
   "account": "аккаунт",
   "added to the pool": "добавлен в пул",
-  "use this proxy": "идут через этот прокси"
+  "use this proxy": "идут через этот прокси",
+  "5h: preserve": "5 ч: оставить",
+  "Weekly: preserve": "Неделя: оставить",
+  "Reserve:": "Резерв: за",
+  "No allowed intervals": "Нет разрешённых интервалов",
+  "Shared values inherited": "Наследуются общие значения"
 }

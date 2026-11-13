@@ -1,5 +1,5 @@
 {
-  "translated_occurrences": 494,
+  "translated_occurrences": 507,
   "remaining_cyrillic_lines": {
     "account-egress-form.tsx": 1,
     "account-email-form.tsx": 0,
@@ -7,6 +7,7 @@
     "account-projects-form.tsx": 0,
     "account-settings-style.tsx": 0,
     "app.tsx": 0,
-    "pool-update-panel.tsx": 0
+    "pool-update-panel.tsx": 0,
+    "src/account-policy.ts": 0
   }
 }
