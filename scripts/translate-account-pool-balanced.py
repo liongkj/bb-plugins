@@ -15,7 +15,8 @@ if not ROOT.exists():
 
 changed_total = 0
 remaining = {}
-for path in sorted(ROOT.glob("*.tsx")):
+ui_paths = sorted(ROOT.glob("*.tsx")) + [ROOT / "src" / "account-policy.ts"]
+for path in ui_paths:
     if path.name.endswith(".test.tsx"):
         continue  # Preserve upstream tests; localize UI files only.
     source = path.read_text()
