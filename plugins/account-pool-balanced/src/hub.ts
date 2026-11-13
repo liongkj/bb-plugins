@@ -16,6 +16,7 @@ import { AccountAuthorizationRequiredError } from "./provider-adapter.js";
 import { createVpnPolicy, VpnRequiredError } from "./vpn-policy.js";
 import { isRecoverableAccessError } from "./recoverable-access.js";
 import { projectTier, projectRole } from "./project-policy.js";
+import type { RetryAvailability } from "./retry-contract.js";
 import { policyThresholds, reserveHours, scheduleAllows } from "./account-policy.js";
 import type {
   Account,
@@ -1687,6 +1688,84 @@ export class AccountPoolHub {
     return adapter.errorResponse(status, message, headers, request);
   }
 
+  /**
+   * BB Provider Retry query. Never refreshes tokens, sends model requests, or
+   * bypasses Balanced's per-account thresholds and project/schedule policy.
+   * Called only after server-side thread/request validation.
+   */
+  async retryAvailability(
+    provider: PoolProvider,
+    family: ModelFamily,
+    projectId: string | null,
+  ): Promise<RetryAvailability> {
+    const now = this.options.now();
+    const accounts = (await this.options.accounts.list()).filter(
+      account => account.provider === provider && account.enabled &&
+        projectTier(account, projectId) !== null,
+    );
+    if (accounts.length === 0)
+      return { kind: "unavailable", reason: "no-enabled-account" };
+
+    const scheduled = accounts.filter(account =>
+      account.drainOnce || scheduleAllows(account.policy, now),
+    );
+    // Do not automatically restart outside an explicit account schedule:
+    // the next schedule opening is not currently exposed as trusted evidence.
+    if (scheduled.length === 0)
+      return { kind: "unavailable", reason: "reset-unknown" };
+
+    const current = this.eligibleEntries(
+      provider, projectId, scheduled, family, now,
+    ).eligible;
+    if (current.some(({ quota }) => (quota.heldUntil ?? 0) <= now))
+      return { kind: "ready" };
+
+    const resetTimes: number[] = [];
+    let unknown = false;
+    let authFailures = 0;
+    const settings = this.options.getSettings();
+    for (const original of scheduled) {
+      const account = { ...original, role: projectRole(original, projectId) };
+      const quota = this.options.quotas.get(account.id);
+      if (quota.error !== null) { authFailures++; continue; }
+      const threshold = policyThresholds(account, settings.switchThreshold);
+      const exhausted = !account.drainOnce &&
+        isQuotaExhausted(quota, family, threshold, now);
+      const cap = capLimit(account, quota, now, {
+        restDays: settings.restDays,
+        offsetMinutes: -new Date(now).getTimezoneOffset(),
+      });
+      const used = weeklyUtilization(quota, now);
+      const capped = !account.drainOnce && cap !== null &&
+        used !== null && used >= cap;
+      const quotaReset = exhausted
+        ? blockingResetAt(quota, family, threshold, now)
+        : now;
+      // A weekly cap may open gradually before reset; using the reset itself
+      // is conservative (never claims earlier eligibility without evidence).
+      const capReset = capped ? governingWeeklyResetAt(quota, family) : now;
+      const resetAt = quotaReset === null || capReset === null
+        ? null : Math.max(quotaReset, capReset);
+      if (resetAt === null) { unknown = true; continue; }
+      const retryAt = Math.max(resetAt, quota.heldUntil ?? 0);
+      if (retryAt <= now) {
+        // A reserve gate, project role, or policy rather than a quota reset
+        // blocked this account; do not claim a retry time we cannot prove.
+        unknown = true;
+      } else {
+        resetTimes.push(retryAt);
+      }
+    }
+    if (resetTimes.length > 0)
+      return { kind: "blocked", retryAt: Math.min(...resetTimes) };
+    return {
+      kind: "unavailable",
+      reason: authFailures === scheduled.length
+        ? "authentication"
+        : unknown ? "reset-unknown" : "source-unavailable",
+    };
+  }
+
   private noEligibleResponse(
     accounts: readonly Account[],
     family: ModelFamily,
@@ -1721,7 +1800,19 @@ export class AccountPoolHub {
         `${adapter.upstreamName}: accounts have stored credential or connection errors. Check their cards.`,
         {"x-bb-pool-error":"POOL_ACCOUNT_UNAVAILABLE"});
     }
-    const threshold = this.options.getSettings().switchThreshold;
+    const settings = this.options.getSettings();
+    const threshold = settings.switchThreshold;
+    const capBlocked = accounts.some(account => {
+      if (account.drainOnce) return false;
+      const quota = this.options.quotas.get(account.id);
+      if (quota.error !== null) return false;
+      const cap = capLimit(account, quota, now, {
+        restDays: settings.restDays,
+        offsetMinutes: -new Date(now).getTimezoneOffset(),
+      });
+      const used = weeklyUtilization(quota, now);
+      return cap !== null && used !== null && used >= cap;
+    });
     const next = accounts
       .filter((account) => account.enabled)
       .flatMap((account) => {
@@ -1734,7 +1825,14 @@ export class AccountPoolHub {
           isQuotaExhausted(quota, family, effectiveThreshold, now)
         )
           return [];
-        const resetAt = Math.max(quota.heldUntil ?? 0, quotaResetAt ?? 0);
+        const cap = account.drainOnce ? null : capLimit(account, quota, now, {
+          restDays: settings.restDays,
+          offsetMinutes: -new Date(now).getTimezoneOffset(),
+        });
+        const used = weeklyUtilization(quota, now);
+        const capReset = cap !== null && used !== null && used >= cap
+          ? governingWeeklyResetAt(quota, family) : null;
+        const resetAt = Math.max(quota.heldUntil ?? 0, quotaResetAt ?? 0, capReset ?? 0);
         return resetAt > now ? [resetAt] : [];
       })
       .sort((left, right) => left - right)[0];
@@ -1747,7 +1845,7 @@ export class AccountPoolHub {
     const quotaBlocked = usable.every(account => isQuotaExhausted(this.options.quotas.get(account.id), family, policyThresholds(account, threshold), now));
     const providerSpent = quotaBlocked && usable.every(account => isQuotaExhausted(this.options.quotas.get(account.id), family, 1, now));
     const upstreamHeld = !quotaBlocked && usable.length>0 && usable.every(account => (this.options.quotas.get(account.id).heldUntil??0)>now);
-    const reason = providerSpent ? "POOL_QUOTA_EXHAUSTED" : quotaBlocked ? "POOL_QUOTA_THRESHOLD" : upstreamHeld ? "POOL_ACCOUNT_HELD" : "POOL_ACCOUNT_POLICY";
+    const reason = providerSpent ? "POOL_QUOTA_EXHAUSTED" : quotaBlocked || capBlocked ? "POOL_QUOTA_THRESHOLD" : upstreamHeld ? "POOL_ACCOUNT_HELD" : "POOL_ACCOUNT_POLICY";
     let message = upstreamHeld
       ? `${adapter.upstreamName}: пул временно не использует аккаунты / Accounts temporarily held by Pooler.`
       : providerSpent
@@ -1770,7 +1868,16 @@ export class AccountPoolHub {
       }
     }
     if (resetAt!==null) message += upstreamHeld ? ` Повторная попытка не ранее / Retry no earlier than: ${resetAt}.` : ` Сброс / reset: ${resetAt}.`;
-    return this.errorResponse(adapter, request, 403, message, {"x-bb-pool-error":reason});
+    // Match the official pooler's retryable status for quota/cooldown.
+    // Policy, authentication and missing-account failures remain non-retryable.
+    const retryable = (adapter.provider === "claude" || adapter.provider === "codex") &&
+      (quotaBlocked || capBlocked || upstreamHeld);
+    const retryAfter = resetAt === null ? null
+      : String(Math.max(1, Math.ceil((new Date(resetAt).getTime() - now) / 1_000)));
+    return this.errorResponse(adapter, request, retryable ? 429 : 403, message, {
+      "x-bb-pool-error": reason,
+      ...(retryable && retryAfter !== null ? { "retry-after": retryAfter } : {}),
+    });
   }
 
   private markError(accountId: string, message: string): void {
