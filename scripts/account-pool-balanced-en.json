@@ -295,7 +295,7 @@
   "маршрут Pooler": "Pooler route",
   "версия": "version",
   "Изменение применяется к новым разговорам. Начатые сохраняют аккаунт и версию маршрута.": "Changes apply to new conversations. Existing ones retain their account and route version.",
-  "Для официального клиента этого провайдера поддержка транспорта ещё не подтверждена.": "Transport support for this provider's official client is not yet verified.",
+  "Для официального клиента этого провайдера поддержка транспорта ещё не подтверждена.": "Transport support for this provider’s official client is not yet verified.",
   "Прокси": "Proxy",
   "Поддерживаемые хосты": "Supported hosts",
   "При отказе запрос завершается. Фактический адрес и ответ провайдера не проверены.": "If the proxy fails, the request fails. The actual address and provider response have not been verified.",
