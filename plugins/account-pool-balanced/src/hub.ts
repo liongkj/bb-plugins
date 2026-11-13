@@ -1837,7 +1837,15 @@ export class AccountPoolHub {
       }
     }
     if (resetAt!==null) message += upstreamHeld ? ` Повторная попытка не ранее / Retry no earlier than: ${resetAt}.` : ` Сброс / reset: ${resetAt}.`;
-    return this.errorResponse(adapter, request, 403, message, {"x-bb-pool-error":reason});
+    // Match the official pooler's retryable status for quota/cooldown.
+    // Policy, authentication and missing-account failures remain non-retryable.
+    const retryable = quotaBlocked || upstreamHeld;
+    const retryAfter = resetAt === null ? null
+      : String(Math.max(1, Math.ceil((new Date(resetAt).getTime() - now) / 1_000)));
+    return this.errorResponse(adapter, request, retryable ? 429 : 403, message, {
+      "x-bb-pool-error": reason,
+      ...(retryable && retryAfter !== null ? { "retry-after": retryAfter } : {}),
+    });
   }
 
   private markError(accountId: string, message: string): void {
