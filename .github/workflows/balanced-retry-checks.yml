@@ -1,0 +1,28 @@
+name: Balanced Pool Provider Retry checks
+on:
+  push:
+    branches: [feat/balanced-official-retry]
+  pull_request:
+    paths:
+      - "plugins/account-pool-balanced/**"
+      - ".github/workflows/balanced-retry-checks.yml"
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile
+      - name: Typecheck Account Pool Balanced
+        run: pnpm --filter bb-plugin-account-pool-balanced typecheck
+      - name: Test Account Pool Balanced
+        run: pnpm --filter bb-plugin-account-pool-balanced test
