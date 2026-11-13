@@ -1,31 +1,39 @@
 #!/usr/bin/env python3
-"""Apply reviewed English UI strings to the vendored OXI plugin.
+"""Translate reviewed Russian UI text in the vendored OXI plugin.
 
-Untranslated Russian strings remain unchanged, to avoid corrupting template
-expressions or changing quota/routing logic. Original text is kept in
-locales/ru-original.json for future i18n work.
+This changes display strings only; account routing and quota policy are untouched.
+Unmatched Russian text remains as-is for follow-up localization.
 """
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / "plugins" / "account-pool-balanced"
 MAPPING = json.loads((Path(__file__).parent / "account-pool-balanced-en.json").read_text())
-TARGETS = [ROOT / "app.tsx"]
-for path in TARGETS:
-    if not path.exists():
-        raise SystemExit(f"Missing vendored source: {path}")
+if not ROOT.exists():
+    raise SystemExit(f"Missing vendored source: {ROOT}")
+
+changed_total = 0
+remaining = {}
+for path in sorted(ROOT.glob("*.tsx")):
     source = path.read_text()
     changed = 0
     for ru, en in sorted(MAPPING.items(), key=lambda pair: len(pair[0]), reverse=True):
-        # Only replace exact string bodies, avoiding accidental identifier edits.
-        for quote in ('"', "'", "`"):
-            before = quote + ru + quote
-            after = quote + en + quote
-            n = source.count(before)
-            source = source.replace(before, after)
-            changed += n
-    path.write_text(source)
-    print(f"{path}: translated {changed} exact string occurrences")
+        # Avoid replacing part of a Russian word (e.g. Аккаунт in Аккаунтов).
+        pattern = re.compile(r"(?<![А-Яа-яЁё])" + re.escape(ru) + r"(?![А-Яа-яЁё])")
+        source, count = pattern.subn(lambda _: en, source)
+        changed += count
+    if changed:
+        path.write_text(source)
+    remaining[str(path.relative_to(ROOT))] = sum(bool(re.search(r"[А-Яа-яЁё]", line)) for line in source.splitlines())
+    changed_total += changed
+    print(f"{path.name}: {changed} replacements, {remaining[str(path.relative_to(ROOT))]} lines still containing Cyrillic")
+
 locale = ROOT / "locales"
 locale.mkdir(exist_ok=True)
-(locale / "ru-original.json").write_text(json.dumps({en: ru for ru, en in MAPPING.items()}, ensure_ascii=False, indent=2) + "\n")
+(locale / "ru-original.json").write_text(
+    json.dumps({en: ru for ru, en in MAPPING.items()}, ensure_ascii=False, indent=2) + "\n"
+)
+(locale / "translation-coverage.json").write_text(
+    json.dumps({"translated_occurrences": changed_total, "remaining_cyrillic_lines": remaining}, indent=2) + "\n"
+)
