@@ -190,7 +190,7 @@ describe("Account Pool settings", () => {
     await slot.findByText('Preparation and update are in progress. Operation will resume automatically.');
     expect(slot.getByRole('button',{name:'Checking update…'}).hasAttribute('disabled')).toBe(true);
     expect(start).toHaveBeenCalledTimes(1);
-    expect(slot.getByText(/Приостановит сессии и запросы автопилота/)).toBeTruthy();
+    expect(slot.getByText(/Pauses sessions and autopilot requests/)).toBeTruthy();
   });
   it('recovers update progress after reopening the interface',async()=>{
     const slot=render([],{"update.status":()=>({operationId:'11111111-1111-4111-8111-111111111111',hostId:'host-one',terminalId:'terminal-one',startedAt:1,state:'running'})});
@@ -960,7 +960,7 @@ describe("Account Pool settings", () => {
     expect(slot.getByText("15% → 98% · now 45%")).toBeTruthy();
     expect(slot.getByText("Requests through pool")).toBeTruthy();
     expect(slot.getByText("12 successful since tracking began")).toBeTruthy();
-    expect(slot.getByText((text) => text.includes("сброс") && text.includes("МСК"))).toBeTruthy();
+    expect(slot.getByText((text) => text.includes("reset") && text.includes("MSK"))).toBeTruthy();
     expect(
       slot.getByText(
         "Only used when no primary account qualifies, or 24 working hours before its weekly reset.",
@@ -1219,7 +1219,7 @@ describe("Account Pool settings", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("ABCD-1234"));
     expect(
       (await slot.findByRole("dialog", { name: "Sign in to  Codex" })).textContent,
-    ).toContain("Жду авторизацию");
+    ).toContain("Waiting for authorization");
     fireEvent.click(slot.getByRole("button", { name: "Close" }));
     await waitFor(() =>
       expect(slot.rpcCalls).toContainEqual({
@@ -1387,7 +1387,7 @@ describe("thread subscription indicator", () => {
     });
     const button = await ui.findByRole("button", { name: /Thread subscription: person@example.com · currently unavailable/ });
     fireEvent.click(button);
-    expect(await ui.findByText(/Последний подтверждённый запрос/)).toBeTruthy();
+    expect(await ui.findByText(/Last confirmed request/)).toBeTruthy();
   });
   it("does not claim an account before observing a request", async () => {
     const ui = renderSlot(app.threadHeaderActions[0]!, { threadId: "thr-test", projectId: "project", isCompactViewport: false }, {
