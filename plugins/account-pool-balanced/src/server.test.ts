@@ -2253,10 +2253,9 @@ describe("Account Pool plugin", () => {
         body: JSON.stringify({ model: "gpt-5", input: [] }),
       },
     );
-    // Exhausted for the rest of the week: a refusal, not a retry hint a client would
-    // sit out in silence.
-    expect(blocked.status).toBe(403);
-    expect(blocked.headers.get("retry-after")).toBeNull();
+    // Official Provider Retry can schedule a later attempt for Codex.
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThan(0);
     const secret = accountSecretSchema.parse(
       JSON.parse(
         await fs.readFile(
@@ -5244,13 +5243,13 @@ describe("Account Pool plugin", () => {
         exhausted.add("sk-first");
         exhausted.add("sk-second");
         const unavailable = await send();
-        expect(unavailable.status).toBe(403);
-        expect(unavailable.headers.get("retry-after")).toBeNull();
+        expect(unavailable.status).toBe(429);
+        expect(Number(unavailable.headers.get("retry-after"))).toBeGreaterThan(0);
         await unavailable.text();
         expect(attempts.slice(5)).toEqual(["sk-second", "sk-first"]);
         const stillUnavailable = await send();
-        expect(stillUnavailable.status).toBe(403);
-        expect(stillUnavailable.headers.get("retry-after")).toBeNull();
+        expect(stillUnavailable.status).toBe(429);
+        expect(Number(stillUnavailable.headers.get("retry-after"))).toBeGreaterThan(0);
         await stillUnavailable.text();
         expect(attempts).toHaveLength(7);
 
