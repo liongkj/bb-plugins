@@ -16,6 +16,8 @@ if not ROOT.exists():
 changed_total = 0
 remaining = {}
 for path in sorted(ROOT.glob("*.tsx")):
+    if path.name.endswith(".test.tsx"):
+        continue  # Preserve upstream tests; localize UI files only.
     source = path.read_text()
     changed = 0
     for ru, en in sorted(MAPPING.items(), key=lambda pair: len(pair[0]), reverse=True):
