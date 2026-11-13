@@ -12,6 +12,8 @@ import {createGuardNetworkCheck,bindGuardNetworkDecision,hostGuardDecisionSchema
 import {z} from "zod";
 import { describeTransportError } from "./transport-diagnostics.js";
 import { registerNetworkRetry } from "./network-retry.js";
+import { retryAvailabilityContract, retryAvailabilityMethod, type RetryAvailability } from "./retry-contract.js";
+import { modelFamily } from "./quota.js";
 import {
   createUpstreamTransport,
   transportErrorCode,
@@ -301,6 +303,48 @@ export function createAccountPoolPlugin(
       return !!provider && !await routing.isBypassed(threadId) &&
         await operations.isRoutingEnabled(provider) && await operations.hasUsableEnabledAccount(provider);
     },now);
+    // Official BB Provider Retry integration. Limit support to routed Claude
+    // Code and Codex turns; other clients keep OXI's network retry behavior.
+    const failedRequestSchema = z.object({
+      requestId: z.string(),
+      execution: z.object({ model: z.string() }),
+    });
+    const availabilityForRetry = async (input: {
+      threadId: string;
+      requestId: string;
+    }): Promise<RetryAvailability> => {
+      const stored = await bb.storage.kv.get(`retry-route:${input.threadId}`);
+      const routed = z.enum(["claude", "codex"]).safeParse(stored);
+      if (!routed.success) return { kind: "not-routed" };
+      const thread = await bb.sdk.threads.get({ threadId: input.threadId });
+      const expected = routed.data === "claude" ? "claude-code" : "codex";
+      if (thread.providerId !== expected ||
+          await routing.isBypassed(input.threadId) ||
+          !await operations.isRoutingEnabled(routed.data)) {
+        return { kind: "not-routed" };
+      }
+      const events = await bb.sdk.threads.events.list({
+        threadId: input.threadId,
+        types: ["client/turn/requested"],
+        order: "desc",
+        limit: "1",
+      });
+      const request = failedRequestSchema.safeParse(events[0]?.data);
+      if (!request.success || request.data.requestId !== input.requestId)
+        return { kind: "unavailable", reason: "source-unavailable" };
+      return hub.retryAvailability(
+        routed.data, modelFamily(request.data.execution.model),
+        thread.projectId ?? null,
+      );
+    };
+    bb.rpc.register(
+      retryAvailabilityContract,
+      { [retryAvailabilityMethod]: availabilityForRetry },
+      {
+        experimental_discoverable: true,
+        experimental_description: "Account Pool Balanced retry availability for routed Claude/Codex failed turns.",
+      },
+    );
     const login = new ClaudeOAuthLogin({
       beforeStart: () => hub.assertNetworkAllowed("claude"),
       fetch: hub.outboundFetch("claude"),
@@ -405,6 +449,7 @@ export function createAccountPoolPlugin(
       const token = await scopedHubToken(context);
       if (context.threadId !== null) {
         await routing.recordRouted(context.threadId, context.hostId);
+        await bb.storage.kv.set(`retry-route:${context.threadId}`, "claude");
       }
       return [
         {
@@ -442,6 +487,8 @@ export function createAccountPoolPlugin(
         return [];
       }
       const token = await scopedHubToken(context);
+      if (context.threadId !== null)
+        await bb.storage.kv.set(`retry-route:${context.threadId}`, "codex");
       return [
         {
           name: "CODEX_OPENAI_BASE_URL",
