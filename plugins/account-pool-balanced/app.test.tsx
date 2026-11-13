@@ -576,13 +576,13 @@ describe("Account Pool settings", () => {
     });
     fireEvent.pointerDown(addButtons[0]!);
     fireEvent.click(
-      await slot.findByText("Sign in to  Claude", { selector: "span.block" }),
+      await slot.findByText("Sign in to Claude", { selector: "span.block" }),
     );
     expect(await slot.findByLabelText("Claude authorization code")).toBeTruthy();
     fireEvent.click(slot.getByRole("button", { name: "Close" }));
     fireEvent.pointerDown(addButtons[1]!);
     fireEvent.click(
-      await slot.findByText("Sign in to  Codex", { selector: "span.block" }),
+      await slot.findByText("Sign in to Codex", { selector: "span.block" }),
     );
     expect(
       (await slot.findByLabelText("Codex device code")).textContent,
@@ -594,7 +594,7 @@ describe("Account Pool settings", () => {
     await slot.findByRole('switch',{name:'Route threads Antigravity'});
     const buttons=await slot.findAllByRole('button',{name:'Add account'});
     fireEvent.pointerDown(buttons[4]!);
-    fireEvent.click(await slot.findByText('Antigravity sign-in',{selector:'span.block'}));
+    fireEvent.click(await slot.findByText('Sign in to Antigravity',{selector:'span.block'}));
     expect(await slot.findByLabelText('Google authorization code')).toBeTruthy();
     expect(slot.queryByText('Add API key…')).toBeNull();
     expect(slot.queryByText('Import from this machine')).toBeNull();
@@ -607,7 +607,7 @@ describe("Account Pool settings", () => {
     await slot.findByRole("switch", {name:"Route threads Antigravity"});
     const addButtons = await slot.findAllByRole("button", { name: "Add account" });
     fireEvent.pointerDown(addButtons[8]!);
-    expect(slot.queryByText("Sign in to  Codex", { selector: "span.block" })).toBeNull();
+    expect(slot.queryByText("Sign in to Codex", { selector: "span.block" })).toBeNull();
     fireEvent.click(await slot.findByText("Add PAT…"));
     const dialog = await slot.findByRole("dialog", { name: "Add PAT Devin" });
     fireEvent.change(slot.getByLabelText("Devin PAT"), { target: { value: "cog_synthetic" } });
@@ -1083,9 +1083,9 @@ describe("Account Pool settings", () => {
     const slot = render([], { "codexLogin.start": codexLoginStart });
     fireEvent.click(await slot.findByRole("button", { name: "Sign in to Codex" }));
     const dialog = await slot.findByRole("dialog", {
-      name: "Sign in to  Codex",
+      name: "Sign in to Codex",
     });
-    expect(slot.getAllByRole("heading", { name: "Sign in to  Codex" })).toHaveLength(
+    expect(slot.getAllByRole("heading", { name: "Sign in to Codex" })).toHaveLength(
       1,
     );
     expect(dialog.textContent).toContain(
@@ -1109,7 +1109,7 @@ describe("Account Pool settings", () => {
       fireEvent.click(
         await slot.findByRole("button", { name: "Sign in to Codex" }),
       );
-      await slot.findByRole("dialog", { name: "Sign in to  Codex" });
+      await slot.findByRole("dialog", { name: "Sign in to Codex" });
       fireEvent.click(slot.getByRole("button", { name: "Close" }));
       await waitFor(() =>
         expect(slot.rpcCalls).toContainEqual({
@@ -1118,7 +1118,7 @@ describe("Account Pool settings", () => {
         }),
       );
       await waitFor(() =>
-        expect(slot.queryByRole("dialog", { name: "Sign in to  Codex" })).toBe(null),
+        expect(slot.queryByRole("dialog", { name: "Sign in to Codex" })).toBe(null),
       );
       const polls = () =>
         slot.rpcCalls.filter((call) => call.method === "codexLogin.poll")
@@ -1218,7 +1218,7 @@ describe("Account Pool settings", () => {
     );
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("ABCD-1234"));
     expect(
-      (await slot.findByRole("dialog", { name: "Sign in to  Codex" })).textContent,
+      (await slot.findByRole("dialog", { name: "Sign in to Codex" })).textContent,
     ).toContain("Waiting for authorization");
     fireEvent.click(slot.getByRole("button", { name: "Close" }));
     await waitFor(() =>
