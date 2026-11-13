@@ -24,7 +24,7 @@ export function EgressControl({accountId,provider,state,pending,error,save}:{
        {state?.profiles.map(p=><option key={`${p.id}:${p.version}`} value={`${p.id}:${p.version}`}>{p.label} · version {p.version}</option>)}
      </select>
    </label>
-   <p className="pool-settings-help">{supported?'Changes apply to new conversations. Existing ones retain their account and route version.':'Transport support for this provider's official client is not yet verified.'}</p>
+   <p className="pool-settings-help">{supported?'Changes apply to new conversations. Existing ones retain their account and route version.':"Transport support for this provider's official client is not yet verified."}</p>
    {selected?.transport==='http-connect'&&<p className="pool-settings-help">Proxy: {selected.endpoint}</p>}
    {selected&&<p className="pool-settings-help">Supported hosts: {selected.hostIds.join(', ')}. If the proxy fails, the request fails. The actual address and provider response have not been verified.</p>}
    {error&&<p role="alert">{error}</p>}
