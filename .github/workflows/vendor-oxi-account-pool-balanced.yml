@@ -1,0 +1,35 @@
+name: Vendor and translate OXI Account Pool Balanced
+on:
+  push:
+    branches: [feat/oxi-account-pool-balanced-en]
+    paths:
+      - ".github/workflows/vendor-oxi-account-pool-balanced.yml"
+      - "scripts/translate-account-pool-balanced.py"
+      - "scripts/account-pool-balanced-en.json"
+permissions:
+  contents: write
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Import upstream source without touching existing plugins
+        run: |
+          git clone --depth=1 https://github.com/OXI-717/bb-plugins.git /tmp/oxi-bb-plugins
+          mkdir -p plugins/account-pool-balanced
+          cp -a /tmp/oxi-bb-plugins/plugins/account-pool-balanced/. plugins/account-pool-balanced/
+          echo "OXI-717/bb-plugins, main (retrieved at workflow execution)" > plugins/account-pool-balanced/UPSTREAM_SOURCE.txt
+          cp /tmp/oxi-bb-plugins/LICENSE plugins/account-pool-balanced/UPSTREAM_LICENSE 2>/dev/null || true
+      - name: Translate reviewed UI strings
+        run: python3 scripts/translate-account-pool-balanced.py
+      - name: Commit vendored plugin to feature branch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add plugins/account-pool-balanced
+          if ! git diff --cached --quiet; then
+            git commit -m "vendor: import OXI Account Pool Balanced with initial English UI"
+            git push
+          fi
