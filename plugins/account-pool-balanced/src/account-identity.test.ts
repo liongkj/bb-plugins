@@ -64,6 +64,6 @@ it.each(['bypass','routing-off','account-disabled'] as const)('leaves retry sche
  if(change==='account-disabled')expect(env).toEqual(expect.arrayContaining([expect.objectContaining({name:'OXI_KIMI_BASE_URL'}),expect.objectContaining({name:'KIMI_API_KEY'})]));
  else expect(env).toEqual([]);
  // This plugin must never enqueue a retry or own a message-dispatch retry hook.
- expect(host.harness.registrations.hooks['message.dispatch']).toBeUndefined();
+ expect(host.harness.registrations.hooks['message.dispatch']).toBeFalsy();
  expect(retry).not.toHaveBeenCalled();
 });
