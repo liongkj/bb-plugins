@@ -1,4 +1,4 @@
-import {createFakePluginHost,makeHostResponse,makeThreadResponse,makeTurnFailedEvent,makeMessageDispatchHookContext} from '@get-bb/plugin-sdk/testing';
+import {createFakePluginHost,makeHostResponse,makeThreadResponse,makeTurnFailedEvent} from '@get-bb/plugin-sdk/testing';
 import {afterEach,expect,it,vi} from 'vitest';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -49,20 +49,21 @@ it('does not let a manually supplied address replace provider OAuth identity',as
  await expect(host.harness.behavior.callRpc('account.setEmail',{accountId:account.id,email:'manual@example.com'})).rejects.toThrow('OAuth email');
  expect((await host.bb.storage.kv.get<Account[]>('accounts:v1'))![0]!.email).toBe('verified@example.com');
 });
-it.each(['bypass','routing-off','account-disabled'] as const)('cancels queued recovery after actual %s routing or availability changes',async change=>{
+it.each(['bypass','routing-off','account-disabled'] as const)('leaves retry scheduling to Provider Retry after %s routing or availability changes',async change=>{
  const {host,account}=await setup('kimi','acp-opencode-kimi');
  host.harness.sdk.stub('threads.get',async()=>makeThreadResponse({id:'thread-one',providerId:'acp-opencode-kimi',status:'error'}));
  host.harness.sdk.stub('threads.events.list',async()=>[{threadId:'thread-one',type:'client/turn/requested',data:{requestId:'request-one'}}] as never);
  host.harness.sdk.stub('threads.queue.list',async()=>[]);
  const retry=vi.fn(async()=>({ok:true,delivery:'queued',queuedMessageId:'retry-one'}) as never);host.harness.sdk.stub('threads.retry',retry);
  await host.harness.behavior.emitThreadEvent('turn.failed',makeTurnFailedEvent({threadId:'thread-one',requestId:'request-one',errorInfo:{category:'connection-failed',httpStatusCode:503,providerCode:null}}));
- expect(retry).toHaveBeenCalledTimes(1);
+ expect(retry).not.toHaveBeenCalled();
  if(change==='bypass')await host.harness.behavior.callRpc('bypass.set',{threadId:'thread-one',bypassed:true});
  else if(change==='routing-off')await host.harness.behavior.callRpc('routing.set',{provider:'kimi',enabled:false});
  else await host.harness.behavior.callRpc('account.disable',{id:account.id});
  const env=await host.harness.behavior.resolveProviderEnv('acp-opencode-kimi',{threadId:'thread-one',projectId:'project-one',hostId:'host-one'});
  if(change==='account-disabled')expect(env).toEqual(expect.arrayContaining([expect.objectContaining({name:'OXI_KIMI_BASE_URL'}),expect.objectContaining({name:'KIMI_API_KEY'})]));
  else expect(env).toEqual([]);
- const hook=host.harness.registrations.hooks['message.dispatch']!;
- expect(await hook(makeMessageDispatchHookContext({thread:{id:'thread-one',status:'error'},requestedExecution:{providerId:'acp-opencode-kimi'},queuedMessages:[{id:'retry-one',payload:{kind:'retry',retryOfTurnRequestId:'request-one',attempt:2,reason:'Temporary connection failure. Retry 1/3.'}}]} as unknown as NonNullable<Parameters<typeof makeMessageDispatchHookContext>[0]>))).toMatchObject({action:'reject'});
+ // This plugin must never enqueue a retry or own a message-dispatch retry hook.
+ expect(host.harness.registrations.hooks['message.dispatch']).toBeUndefined();
+ expect(retry).not.toHaveBeenCalled();
 });
