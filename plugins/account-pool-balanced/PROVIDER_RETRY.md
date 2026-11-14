@@ -16,7 +16,14 @@ for **routed Claude Code and Codex threads only**.
   reset estimate, `ready` or `unavailable`.
 - Explicit schedules, project restrictions, disabled accounts, authentication
   errors and unknown reset times are **not** automatically bypassed.
-- Balanced's existing bounded network retries remain for transient failures.
+- **No separate retry queue or `turn.failed` handler exists in Balanced**. BB
+  Provider Retry owns transient network failures, overloads and rate limits.
+- The official availability RPC is consulted for quota failures on routed
+  Claude Code and Codex threads. Other providers still benefit from Provider
+  Retry generic network/overload handling, but do not have custom quota
+  availability integration here.
+- Provider Retry defaults to a six-hour maximum automatic wait, configurable
+  to 24 hours or No limit. Provider Retry also bounds retry attempts.
 - This does not provide a perpetual background worker by itself: BB's
   **Provider Retry** component must be present and enabled to schedule the
   delayed turn retry.

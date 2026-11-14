@@ -11,7 +11,6 @@ import { RequestJournal } from "./request-journal.js";
 import {createGuardNetworkCheck,bindGuardNetworkDecision,hostGuardDecisionSchema} from "./guard-network.js";
 import {z} from "zod";
 import { describeTransportError } from "./transport-diagnostics.js";
-import { registerNetworkRetry } from "./network-retry.js";
 import { retryAvailabilityContract, retryAvailabilityMethod, type RetryAvailability } from "./retry-contract.js";
 import { modelFamily } from "./quota.js";
 import {
@@ -291,18 +290,9 @@ export function createAccountPoolPlugin(
       () => bb.realtime.publish(ACCOUNT_POOL_ACCOUNTS_CHANGED, {}),
       (accountId) => hub.refreshUsage(accountId, true),
     );
-    const retryProviders:Readonly<Record<string,PoolProvider>>={
-      codex:'codex','claude-code':'claude','acp-oxi-cursor':'cursor',
-      'acp-oxi-devin-pool':'devin','acp-opencode-zai':'zai',
-      'acp-agy':'agy','acp-opencode-neuraldeep':'neuraldeep','acp-opencode-go':'opencode-go','acp-opencode-kimi':'kimi',
-      'acp-opencode-kimi-highspeed':'kimi',
-      'acp-grok':'grok',
-    };
-    await registerNetworkRetry(bb,async(threadId,providerId)=>{
-      const provider=retryProviders[providerId];
-      return !!provider && !await routing.isBypassed(threadId) &&
-        await operations.isRoutingEnabled(provider) && await operations.hasUsableEnabledAccount(provider);
-    },now);
+    // Retry scheduling belongs exclusively to BB's built-in Provider Retry.
+    // Registering a second turn.failed listener here can race its queueing,
+    // including for transient network failures and quota resets.
     // Official BB Provider Retry integration. Limit support to routed Claude
     // Code and Codex turns; other clients keep OXI's network retry behavior.
     const failedRequestSchema = z.object({
