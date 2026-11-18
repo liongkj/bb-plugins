@@ -325,6 +325,25 @@ describe("Account Pool settings", () => {
     expect(within(slot.getByRole("dialog")).queryByText("Synthetic browser VPN failure")).toBeNull();
   });
 
+  it("reauthorizes an existing Codex account via device code without opening Helium", async () => {
+    const selected = account({ provider: "codex", codexAccountId: "chatgpt-account-1", email: "codex@example.com", label: "Codex" });
+    const slot = render([selected], {
+      "codexLogin.reauthorize": () => ({
+        sessionId: "33333333-3333-4333-8333-333333333333",
+        verificationUri: "https://auth.openai.com/codex/device",
+        userCode: "ABCD-1234",
+        expiresAt: Date.now() + 600000, intervalMs: 60000,
+      }),
+    });
+    fireEvent.click(await slot.findByRole("button", { name: "Open codex@example.com" }));
+    fireEvent.pointerDown(slot.getByRole("button", { name: "Other account actions" }), { button: 0, ctrlKey: false });
+    fireEvent.click(await slot.findByRole("menuitem", { name: "Reauthorize" }));
+    expect(await slot.findByText("Reauthorize Codex")).toBeTruthy();
+    expect(await slot.findByLabelText("Codex device code")).toHaveProperty("textContent", expect.stringContaining("ABCD-1234"));
+    expect(slot.rpcCalls).toContainEqual({ method: "codexLogin.reauthorize", input: { accountId: selected.id } });
+    expect(slot.rpcCalls.some(call => call.method === "browser.open" || call.method === "codexLogin.start")).toBe(false);
+  });
+
   it("opens the existing reauthorization URL in that account profile", async () => {
     const selected = account();
     const slot = render([selected], {
