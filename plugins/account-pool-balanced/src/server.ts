@@ -48,7 +48,7 @@ import {
 import { PoolOperations } from "./operations.js";
 import { registerUsageSource } from "./usage-source.js";
 import { accountPoolRpcContract, createRpcHandlers } from "./rpc.js";
-import { openAccountBrowser, listBrowserProfiles } from "./browser-profiles.js";
+import { openAccountBrowser, listBrowserProfiles, resolveAccount } from "./browser-profiles.js";
 import {createBrowserRouter,browserHostContract} from "./browser-host.js";
 import { ClaudeOAuthLogin } from "./oauth-login.js";
 import { CodexDeviceLogin } from "./codex-device-login.js";
@@ -375,7 +375,14 @@ export function createAccountPoolPlugin(
       callHost:(method,input,hostId)=>method==='open'
         ? browserHost.call('open',browserHostContract.open.input.parse(input),{hostId,timeoutMs:60000})
         : browserHost.call('list',browserHostContract.list.input.parse(input),{hostId,timeoutMs:10000}),
-      localOpen:async(query,url)=>openAccountBrowser({accounts:await operations.list(),query,url,dataDir:bb.server.experimental_dataDir,pluginId:bb.pluginId,vpnStatusFile:config.get().vpnStatusFile}),
+      vpnRequired:(provider)=>config.get().vpnGuardEnabled || config.get().vpnOnlyProviders.includes(provider as "codex" | "claude" | "cursor" | "devin" | "neuraldeep" | "agy"),
+      localOpen:async(query,url)=>{
+        const accountList=await operations.list();
+        const account=resolveAccount(accountList,query);
+        const settings=config.get();
+        return openAccountBrowser({accounts:accountList,query,url,dataDir:bb.server.experimental_dataDir,pluginId:bb.pluginId,vpnStatusFile:settings.vpnStatusFile,
+          vpnRequired:settings.vpnGuardEnabled || settings.vpnOnlyProviders.some(p=>p===account.provider)});
+      },
       localList:async()=>listBrowserProfiles({accounts:await operations.list(),dataDir:bb.server.experimental_dataDir,pluginId:bb.pluginId}),
     });
     maintenanceActivity=()=>hub.maintenanceActivity();
