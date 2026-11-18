@@ -30,6 +30,34 @@ function delayedAccountReads(kv: PluginKvStorage): PluginKvStorage {
   };
 }
 
+describe("Codex OAuth reauthorization", () => {
+  it("replaces credentials in place and preserves account preferences", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bb-codex-reauth-"));
+    const host = createFakePluginHost({ pluginId: "account-pool-balanced", dataDir });
+    cleanups.push(async () => { await host.harness.lifecycle.dispose(); await fs.rm(dataDir, { recursive: true, force: true }); });
+    const store = new AccountStore(host.bb.storage.kv, path.join(dataDir, "secrets"));
+    const oldSecret = { kind: "oauth" as const, accessToken: "old-access", refreshToken: "old-refresh", idToken: "old-id", expiresAt: null };
+    const account = await store.add({
+      provider: "codex", kind: "oauth", label: "Personal", email: "old@example.com",
+      accountUuid: null, codexAccountId: "chatgpt-account-1",
+      subscriptionType: null, rateLimitTier: null, enabled: false, priority: 7,
+    }, oldSecret);
+    await store.setCap(account.id, { early: 0.8, late: 0.8 });
+    await store.setRole(account.id, "reserve");
+    const before = await store.get(account.id);
+    const newSecret = { ...oldSecret, accessToken: "new-access", refreshToken: "new-refresh", idToken: "new-id" };
+    await expect(store.replaceCodexAuthorization(account.id, { accountId: "another-account", email: "other@example.com" }, newSecret))
+      .rejects.toThrow("different ChatGPT account");
+    expect(await store.readSecret(account.id)).toEqual(oldSecret);
+    const updated = await store.replaceCodexAuthorization(account.id,
+      { accountId: "chatgpt-account-1", email: "updated@example.com" }, newSecret);
+    expect(updated).toMatchObject({ id: account.id, email: "updated@example.com", enabled: false, priority: 7, role: "reserve", cap: { early: 0.8, late: 0.8 } });
+    expect(updated).toMatchObject({ codexAccountId: before?.codexAccountId, createdAt: before?.createdAt });
+    expect(await store.readSecret(account.id)).toEqual(newSecret);
+    expect(await store.list()).toHaveLength(1);
+  });
+});
+
 describe("AccountStore", () => {
   it("restores previous authorization when reauthorization metadata cannot be persisted", async () => {
     const dataDir=await mkdtemp(path.join(tmpdir(),'bb-account-store-'));
