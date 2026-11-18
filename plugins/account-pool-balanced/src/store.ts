@@ -315,6 +315,36 @@ export class AccountStore {
     });
   }
 
+  async replaceCodexAuthorization(
+    id: string,
+    identity: { accountId: string; email: string | null },
+    secret: AccountSecret,
+  ): Promise<Account> {
+    return this.serialized(async () => {
+      const accounts = await this.list();
+      const index = accounts.findIndex(account => account.id === id);
+      const account = accounts[index];
+      if (!account || account.provider !== "codex" || account.kind !== "oauth" ||
+          !account.codexAccountId)
+        throw new Error("Codex OAuth account no longer exists.");
+      // Compare the verified account identity, not just the editable email.
+      if (account.codexAccountId !== identity.accountId)
+        throw new Error("Codex authorization belongs to a different ChatGPT account.");
+      const updated = accountSchema.parse({ ...account, email: identity.email });
+      const previousSecret = await this.readSecret(id);
+      try {
+        await this.writeSecret(id, secret);
+        accounts[index] = updated;
+        await this.kv.set(ACCOUNTS_KEY, accounts);
+      } catch (error) {
+        try { await this.writeSecret(id, previousSecret); }
+        catch { throw new Error("Codex authorization persistence and rollback failed; check storage."); }
+        throw error;
+      }
+      return updated;
+    });
+  }
+
   async writeSecret(id: string, secret: AccountSecret): Promise<void> {
     await this.initialize();
     const value = `${JSON.stringify(accountSecretSchema.parse(secret))}\n`;

@@ -355,7 +355,7 @@ export function createAccountPoolPlugin(
       fetch: hub.outboundFetch("codex"),
       now,
       authBaseUrl: options.codexAuthBaseUrl,
-      addAccount: (authenticated) => operations.addCodexOAuth(authenticated),
+      addAccount: (authenticated, targetAccountId) => operations.addCodexOAuth(authenticated, targetAccountId),
     });
     const grokLogin = new GrokDeviceLogin({
       now,

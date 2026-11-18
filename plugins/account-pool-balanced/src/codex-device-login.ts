@@ -79,6 +79,7 @@ interface DeviceLoginSession {
   expiresAt: number;
   nextPollAt: number;
   polling: boolean;
+  targetAccountId?: string;
 }
 
 export interface CodexDeviceAccount {
@@ -95,7 +96,7 @@ export interface CodexDeviceLoginOptions {
   fetch?: typeof fetch;
   now?: () => number;
   authBaseUrl?: string;
-  addAccount: (authenticated: CodexDeviceAccount) => Promise<AccountSummary>;
+  addAccount: (authenticated: CodexDeviceAccount, targetAccountId?: string) => Promise<AccountSummary>;
 }
 
 export interface CodexDeviceLoginStart {
@@ -174,7 +175,7 @@ export class CodexDeviceLogin {
     );
   }
 
-  async start(): Promise<CodexDeviceLoginStart> {
+  async start(targetAccountId?: string): Promise<CodexDeviceLoginStart> {
     const pruneBefore = this.now();
     for (const [sessionId, session] of this.sessions) {
       if (pruneBefore >= session.expiresAt) this.deleteSession(sessionId);
@@ -211,6 +212,7 @@ export class CodexDeviceLogin {
       expiresAt: expiresAt(parsed.data, now),
       nextPollAt: now + intervalMs,
       polling: false,
+      ...(targetAccountId === undefined ? {} : { targetAccountId }),
     };
     this.sessions.set(session.sessionId, session);
     this.scheduleExpiry(session);
@@ -313,7 +315,7 @@ export class CodexDeviceLogin {
         };
       }
       this.deleteSession(session.sessionId);
-      return await this.exchange(parsed.data);
+      return await this.exchange(parsed.data, session.targetAccountId);
     } catch {
       if (this.now() < session.expiresAt) return { status: "pending" };
       this.deleteSession(session.sessionId);
@@ -357,6 +359,7 @@ export class CodexDeviceLogin {
 
   private async exchange(
     authorized: z.infer<typeof deviceTokenResponseSchema>,
+    targetAccountId?: string,
   ): Promise<CodexDeviceLoginPoll> {
     const response = await this.fetch(`${this.authBaseUrl}/oauth/token`, {
       method: "POST",
@@ -398,7 +401,7 @@ export class CodexDeviceLogin {
         refreshToken: parsed.data.refresh_token,
         idToken: parsed.data.id_token,
         expiresAt: codexAccessTokenExpiresAt(parsed.data.access_token),
-      });
+      }, targetAccountId);
       return { status: "complete", account };
     } catch (error) {
       return {

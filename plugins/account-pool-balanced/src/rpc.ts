@@ -166,6 +166,10 @@ export const accountPoolRpcContract = defineRpcContract({
     input: z.null(),
     output: codexLoginStartSchema,
   },
+  "codexLogin.reauthorize": {
+    input: z.object({ accountId: z.string().uuid() }).strict(),
+    output: codexLoginStartSchema,
+  },
   "codexLogin.poll": {
     input: codexLoginPollInputSchema,
     output: codexLoginPollSchema,
@@ -290,6 +294,10 @@ export function createRpcHandlers(
     "agyLogin.complete":async({sessionId,pasted})=>{if(!agyLogin)throw Error('Antigravity login unavailable');return operations.addAgyOAuth(await agyLogin.complete(sessionId,pasted));},
     "agyLogin.cancel":({sessionId})=>{if(!agyLogin)throw Error('Antigravity login unavailable');agyLogin.cancel(sessionId);return {cancelled:true};},
     "codexLogin.start": () => codexLogin.start(),
+    "codexLogin.reauthorize": async ({ accountId }) => {
+      await operations.validateCodexReauthorization(accountId);
+      return codexLogin.start(accountId);
+    },
     "codexLogin.poll": (input) => codexLogin.poll(input),
     "codexLogin.cancel": (input) => ({
       cancelled: codexLogin.cancel(input),

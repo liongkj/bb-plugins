@@ -156,7 +156,28 @@ export class PoolOperations {
 
   async addCodexOAuth(
     authenticated: CodexDeviceAccount,
+    targetAccountId?: string,
   ): Promise<AccountSummary> {
+    if (targetAccountId !== undefined) {
+      const account = await this.hub.replaceAccountAuthorization(targetAccountId,
+        () => this.accounts.replaceCodexAuthorization(targetAccountId, {
+          accountId: authenticated.accountId, email: authenticated.email,
+        }, {
+          kind: "oauth",
+          accessToken: authenticated.accessToken,
+          refreshToken: authenticated.refreshToken,
+          idToken: authenticated.idToken,
+          expiresAt: authenticated.expiresAt,
+        }),
+      );
+      const quota = this.quotas.get(account.id);
+      this.quotas.put({ ...quota, error: null, heldUntil: null });
+      this.onAccountsChanged();
+      if (account.enabled) await this.onAccountEnabled(account.id);
+      const summary = (await this.list()).find(item => item.id === account.id);
+      if (!summary) throw new Error("Reauthorized Codex account could not be read back.");
+      return summary;
+    }
     const account = await this.accounts.add(
       {
         provider: "codex",
@@ -227,6 +248,12 @@ export class PoolOperations {
 
   async list(): Promise<AccountSummary[]> {
     return (await this.status()).accounts;
+  }
+
+  async validateCodexReauthorization(id: string): Promise<void> {
+    const account = await this.accounts.get(id);
+    if (!account || account.provider !== "codex" || account.kind !== "oauth" || !account.codexAccountId)
+      throw new Error("Codex OAuth account not found or missing a verified ChatGPT account ID.");
   }
 
   async validateClaudeReauthorization(id: string): Promise<void> {
