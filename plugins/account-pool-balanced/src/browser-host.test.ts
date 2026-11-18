@@ -18,7 +18,7 @@ it('host refuses VPN-off and unsupported OS before browser work; VPN-on reaches 
  let connected=false;const launch=vi.fn(async(_options:unknown)=>({}));
  const handlers=createMacBrowserHandlers({platform:()=> 'darwin',dataDir:()=>'/synthetic/bb',registryExists:async()=>true,readEvidence:async()=>({state:connected?'connected':'disconnected',assurance:connected?'verified_ipv4':'unverified'}),open:launch,list:async()=>[]});
  await expect(handlers.open({accounts:[account],accountId:account.id,vpnRequired:true})).rejects.toThrow();expect(launch).not.toHaveBeenCalled();
- connected=true;expect(await handlers.open({accounts:[account],accountId:account.id})).toEqual({opened:true});
+ connected=true;expect(await handlers.open({accounts:[account],accountId:account.id,vpnRequired:true})).toEqual({opened:true});
  expect(launch.mock.calls[0]?.[0]).toMatchObject({dataDir:'/synthetic/bb',query:account.id});
  const other=createMacBrowserHandlers({platform:()=> 'linux',dataDir:()=>'/synthetic/bb',registryExists:async()=>true,readEvidence:async()=>({state:'connected',assurance:'verified_ipv4'}),open:launch,list:async()=>[]});
  await expect(other.open({accounts:[account],accountId:account.id,vpnRequired:true})).rejects.toThrow();expect(launch).toHaveBeenCalledTimes(1);
@@ -49,7 +49,7 @@ it('keeps first-use close-and-retry guidance without exposing remote errors',asy
 });
 
 it('permits a VPN-optional remote launch without verified VPN evidence',async()=>{
- const launch=vi.fn(async()=>({}));
+ const launch=vi.fn(async(_options:unknown)=>({}));
  const readEvidence=vi.fn(async()=>({state:'disconnected',assurance:'invalid'}));
  const h=createMacBrowserHandlers({platform:()=> 'darwin',dataDir:()=>'/synthetic/bb',registryExists:async()=>true,readEvidence,open:launch,list:async()=>[]});
  expect(await h.open({accounts:[account],accountId:account.id,vpnRequired:false})).toEqual({opened:true});
