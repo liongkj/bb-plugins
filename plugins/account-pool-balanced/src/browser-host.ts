@@ -11,7 +11,7 @@ const accountSchema=z.object({id:z.string().uuid(),provider:providerSchema,label
 export type BrowserAccount=z.infer<typeof accountSchema>;
 const accountsSchema=z.array(accountSchema).max(256).refine(a=>new Set(a.map(x=>x.id)).size===a.length);
 const urlSchema=z.string().max(8192).refine(s=>{try{safeBrowserUrl(s);return true;}catch{return false;}});
-const openInput=z.object({accounts:accountsSchema,accountId:z.string().uuid(),url:urlSchema.optional()}).strict();
+const openInput=z.object({accounts:accountsSchema,accountId:z.string().uuid(),url:urlSchema.optional(),vpnRequired:z.boolean()}).strict();
 const listInput=z.object({accounts:accountsSchema}).strict();
 const rowSchema=z.object({accountId:z.string(),provider:z.string(),label:z.string(),email:z.string().nullable(),profileName:z.string(),profileDirectory:z.string(),profileDir:z.string(),exists:z.boolean(),updatedAt:z.number().nullable()}).strict();
 export const browserHostContract=defineRpcContract({
@@ -27,6 +27,7 @@ export interface BrowserRouterOptions {
  callHost:(method:'open'|'list',input:OpenInput|z.infer<typeof listInput>,hostId:string)=>Promise<unknown>;
  localOpen:(query:string,url?:string)=>Promise<unknown>;
  localList:()=>Promise<BrowserProfileInfo[]>;
+ vpnRequired:(provider:BrowserAccount['provider'])=>boolean;
 }
 export function createBrowserRouter(options:BrowserRouterOptions){
  const inventory=async()=>accountsSchema.parse((await options.accounts()).map(({id,provider,label,email})=>({id,provider,label,email})));
@@ -44,7 +45,7 @@ export function createBrowserRouter(options:BrowserRouterOptions){
    const onboarding:BrowserAccount={id:'01f92891-506b-4b5c-b164-035d69bf8288',provider:'agy',label:'Antigravity sign-in',email:null};
    const accounts=await inventory();
    if(accounts.some(a=>a.id===onboarding.id))throw Error('Onboarding profile identity collision');
-   const input=openInput.parse({accounts:[...accounts,onboarding],accountId:onboarding.id,url});
+   const input=openInput.parse({accounts:[...accounts,onboarding],accountId:onboarding.id,url,vpnRequired:true});
    await target(id);
    try{return browserHostContract.open.output.parse(await options.callHost('open',input,id));}
    catch{throw Error('Remote sign-in browser did not confirm launch. Check the Mac before retrying. On first sign-in, close Helium once to prepare the new profile, then click sign-in again.');}
@@ -53,7 +54,7 @@ export function createBrowserRouter(options:BrowserRouterOptions){
    const id=options.getHostId();
    if(id===null){await options.localOpen(query,url);return {opened:true};}
    const accounts=await inventory();const account=resolveAccount(accounts,query);
-   const input=openInput.parse({accounts,accountId:account.id,...(url===undefined?{}:{url})});
+   const input=openInput.parse({accounts,accountId:account.id,vpnRequired:options.vpnRequired(account.provider),...(url===undefined?{}:{url})});
    await target(id);
    try{return browserHostContract.open.output.parse(await options.callHost('open',input,id));}
    catch{throw Error('Remote account browser did not confirm launch. Check the Mac before retrying.');}
@@ -90,10 +91,13 @@ export function createMacBrowserHandlers(deps:{
   async open(raw:OpenInput,signal?:AbortSignal):Promise<{opened:true}>{
    signal?.throwIfAborted();
    const input=openInput.parse(raw);resolveAccount(input.accounts,input.accountId);
-   const dataDir=await local();const evidence=await deps.readEvidence();
-   if(evidence.state!=='connected'||evidence.assurance!=='verified_ipv4')throw Error('Verified Mac VPN is required for the shared account browser.');
+   const dataDir=await local();
+   if(input.vpnRequired){
+     const evidence=await deps.readEvidence();
+     if(evidence.state!=='connected'||evidence.assurance!=='verified_ipv4')throw Error('Verified Mac VPN is required for the shared account browser.');
+   }
    signal?.throwIfAborted();
-   await deps.open({accounts:input.accounts,query:input.accountId,url:input.url,dataDir,pluginId:'account-pool-balanced'});
+   await deps.open({accounts:input.accounts,query:input.accountId,url:input.url,dataDir,pluginId:'account-pool-balanced',vpnRequired:input.vpnRequired});
    return {opened:true};
   },
   async list(raw:z.infer<typeof listInput>){
