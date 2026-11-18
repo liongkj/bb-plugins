@@ -353,6 +353,24 @@ describe("openAccountBrowser", () => {
       }),
     ).rejects.toThrow(/verified_ipv4/);
   });
+  it("opens a VPN-optional account despite invalid VPN evidence without losing profile isolation", async () => {
+    const box = await sandbox();
+    const readVpn = vi.fn(() => Promise.resolve(UNVERIFIED));
+    const spawn = fakeSpawn();
+    const result = await openAccountBrowser({
+      ...baseOptions(box),
+      query: "a@example.test",
+      vpnRequired: false,
+      readVpn,
+      fetcher: () => Promise.resolve(null),
+      spawnImpl: spawn.spawnImpl,
+    });
+    expect(result.guarded).toBe(false);
+    expect(result.timezone).toBeNull();
+    expect(readVpn).not.toHaveBeenCalled();
+    expect(result.profileDir).toContain(box.heliumRoot);
+    expect(spawn.captured).toHaveLength(1);
+  });
   it("fails closed when the exit timezone is unknown for a guarded account", async () => {
     const box = await sandbox();
     await expect(
