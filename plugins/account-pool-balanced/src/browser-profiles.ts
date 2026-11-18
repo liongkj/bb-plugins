@@ -521,6 +521,8 @@ export interface OpenAccountBrowserOptions {
   dataDir: string;
   pluginId: string;
   vpnStatusFile?: string | null;
+  /** Selected provider requires verified VPN evidence for this browser launch. Defaults to true for direct callers. */
+  vpnRequired?: boolean | undefined;
   heliumRoot?: string | undefined;
   fetcher?: GeoFetcher | undefined;
   readVpn?: VpnReader | undefined;
@@ -557,8 +559,9 @@ async function openAccountBrowserLocked(
 ): Promise<OpenAccountBrowserResult> {
   if ((options.platformName ?? currentPlatform()) === "win32") throw new Error("Account browser transport currently requires macOS or Linux.");
   const account = resolveAccount(options.accounts, options.query);
-  // Native switching can reach any account without calling Pooler again.
-  const guarded = true;
+  // Trust the server's selected-provider policy for this launch. Direct callers
+  // default to protected mode; optional mode never disables profile isolation.
+  const guarded = options.vpnRequired !== false;
   if (guarded) {
     const file = options.vpnStatusFile ??
       path.join(homedir(), ".local", "state", "vpnks", "vpn-state.json");
