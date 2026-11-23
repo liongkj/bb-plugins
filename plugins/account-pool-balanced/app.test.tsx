@@ -557,6 +557,20 @@ describe("Account Pool settings", () => {
     },
   );
 
+  it.each([
+    { enabled: true, label: "Disable account", method: "account.disable" },
+    { enabled: false, label: "Enable account", method: "account.enable" },
+  ])("offers $label directly in the account footer", async ({ enabled, label, method }) => {
+    const selected = account({ enabled, status: enabled ? "ready" : "disabled" });
+    const slot = render([selected], { [method]: () => ({ account: { ...selected, enabled: !enabled } }) });
+    fireEvent.click(await slot.findByRole("button", { name: "Open person@example.com" }));
+    const dialog = within(slot.getByRole("dialog"));
+    const quickAction = dialog.getByRole("button", { name: label });
+    expect(quickAction).toBeTruthy();
+    fireEvent.click(quickAction);
+    await waitFor(() => expect(slot.rpcCalls).toContainEqual({ method, input: { id: selected.id } }));
+  });
+
   it("confirms Remove before dispatching its RPC contract", async () => {
     const slot = render([account()], {
       "account.remove": () => ({ removed: true }),

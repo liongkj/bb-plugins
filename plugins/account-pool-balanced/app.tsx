@@ -2482,6 +2482,16 @@ function AccountDialog({
           <Button size="sm" variant="outline" disabled={pending} onClick={() => act("refresh")}>
             Refresh quotas
           </Button>
+          <Button
+            size="sm"
+            variant={account.enabled ? "outline" : "default"}
+            disabled={pending || projectsUnsaved || quotaUnsaved || emailUnsaved}
+            aria-label={account.enabled ? "Disable account" : "Enable account"}
+            onClick={() => act("toggle")}
+          >
+            <Icon name={account.enabled ? "Pause" : "Play"} className="size-4" />
+            {account.enabled ? "Disable" : "Enable"}
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="outline" aria-label="Other account actions">
@@ -2489,9 +2499,6 @@ function AccountDialog({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem disabled={pending} onSelect={() => act("toggle")}>
-                {account.enabled ? "Disable" : "Enable"}
-              </DropdownMenuItem>
               {(account.provider === "claude" || account.provider === "codex") && account.kind === "oauth" && (
                 <DropdownMenuItem disabled={pending || projectsUnsaved || quotaUnsaved || emailUnsaved} onSelect={reauthorize}>
                   Reauthorize
