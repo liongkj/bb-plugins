@@ -1877,6 +1877,7 @@ export class AccountPoolHub {
     return this.errorResponse(adapter, request, retryable ? 429 : 403, message, {
       "x-bb-pool-error": reason,
       ...(retryable && retryAfter !== null ? { "retry-after": retryAfter } : {}),
+      ...(retryable && resetAt !== null ? { "x-bb-pool-reset-at": String(Math.ceil(new Date(resetAt).getTime() / 1_000)) } : {}),
     });
   }
 

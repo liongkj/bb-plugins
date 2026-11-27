@@ -20,3 +20,16 @@ it.each(['VPN_REQUIRED','VPN_GUARD_BLOCKED','VPN_GUARD_UNAVAILABLE'])('represent
  const r=poolErrorResponse('cursor',503,'Waiting for verified VPN',{'x-bb-pool-error':reason,'retry-after':'10'},new Request('http://fixture.test',{headers:{'content-type':'application/connect+proto'}}));
  expect(r.status).toBe(200);expect(r.headers.get('x-bb-pool-http-status')).toBe('503');expect(r.headers.get('retry-after')).toBe('10');const bytes=Buffer.from(await r.arrayBuffer());expect(JSON.parse(bytes.subarray(5).toString())).toMatchObject({error:{code:'unavailable',message:expect.stringContaining(reason)}});
 });
+it.each(['POOL_QUOTA_EXHAUSTED','POOL_QUOTA_THRESHOLD'])('ends a Codex turn on %s with the reset time instead of a retryable rate limit',async reason=>{
+ const r=poolErrorResponse('codex',429,'Provider quota exhausted',{'x-bb-pool-error':reason,'retry-after':'45000','x-bb-pool-reset-at':'1795804067'});
+ expect(r.status).toBe(429);
+ expect(await r.json()).toEqual({error:{type:'usage_limit_reached',code:reason,resets_at:1795804067,message:expect.stringContaining(reason)}});
+});
+it('keeps a short Codex pool hold retryable',async()=>{
+ const r=poolErrorResponse('codex',429,'Accounts temporarily held',{'x-bb-pool-error':'POOL_ACCOUNT_HELD','retry-after':'30'});
+ expect(await r.json()).toMatchObject({error:{type:'rate_limit_error',code:'POOL_ACCOUNT_HELD'}});
+});
+it('keeps the Claude quota envelope unchanged',async()=>{
+ const r=poolErrorResponse('claude',429,'Provider quota exhausted',{'x-bb-pool-error':'POOL_QUOTA_EXHAUSTED','x-bb-pool-reset-at':'1795804067'});
+ expect(await r.json()).toMatchObject({type:'error',error:{type:'rate_limit_error',code:'POOL_QUOTA_EXHAUSTED'}});
+});

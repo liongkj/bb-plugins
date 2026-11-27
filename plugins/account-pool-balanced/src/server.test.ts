@@ -2279,7 +2279,15 @@ describe("Account Pool plugin", () => {
     );
     // Official Provider Retry can schedule a later attempt for Codex.
     expect(blocked.status).toBe(429);
-    expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThan(0);
+    const retryAfter = Number(blocked.headers.get("retry-after"));
+    expect(retryAfter).toBeGreaterThan(0);
+    const blockedBody = (await blocked.json()) as {
+      error: { type: string; resets_at: number };
+    };
+    expect(blockedBody.error.type).toBe("usage_limit_reached");
+    expect(
+      Math.abs(blockedBody.error.resets_at - (Date.now() / 1_000 + retryAfter)),
+    ).toBeLessThan(5);
     const secret = accountSecretSchema.parse(
       JSON.parse(
         await fs.readFile(
