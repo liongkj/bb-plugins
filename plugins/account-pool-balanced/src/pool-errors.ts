@@ -7,6 +7,7 @@ export function defaultPoolErrorCode(status:number):string {
  if(status===403)return 'POOL_ACCESS_DENIED';
  return 'POOL_REQUEST_REJECTED';
 }
+const QUOTA_REASONS=new Set(['POOL_QUOTA_EXHAUSTED','POOL_QUOTA_THRESHOLD']);
 /** Only local Pooler errors are rendered here; upstream success/passthrough is unchanged. */
 export function poolErrorResponse(provider:PoolProvider,status:number,message:string,init?:HeadersInit,request?:Request):Response {
  const headers=new Headers(init);
@@ -26,6 +27,12 @@ export function poolErrorResponse(provider:PoolProvider,status:number,message:st
   return Response.json(error,{status,headers});
  }
  const anthropic=provider==='claude'||provider==='kimi';
+ // Codex retries a rate_limit_error 429 five times and leaves the turn active, so BB Provider
+ // Retry never sees a failed turn. usage_limit_reached ends the turn with its reset time.
+ if(provider==='codex'&&status===429&&QUOTA_REASONS.has(reason)){
+  const resetsAt=Number(headers.get('x-bb-pool-reset-at'));
+  return Response.json({error:{type:'usage_limit_reached',code:reason,message:text,...(resetsAt>0?{resets_at:resetsAt}:{})}},{status,headers});
+ }
  const type=status===401?'authentication_error':status===429?'rate_limit_error':'api_error';
  return Response.json(anthropic?{type:'error',error:{type,code:reason,message:text}}:{error:{type,code:reason,message:text}},{status,headers});
 }
